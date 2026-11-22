@@ -90,7 +90,13 @@ test('correo de Resend respeta consentimiento y distingue la aceptación de la e
   t.mock.method(globalThis,'fetch',async(url,opts)=>{
     assert.equal(url,'https://api.resend.com/emails');count++;
     const data=JSON.parse(opts.body);
-    assert.match(data.text,/simulador|Admisiones/);assert.match(data.headers['List-Unsubscribe'],/api\/preferences/);
+    assert.match(data.text,/Hola, Persona\./);
+    assert.match(data.text,/Maestría en Educación/);
+    assert.doesNotMatch(data.text,/\/confirmar\//);
+    assert.match(data.text,/\/cita\?programa=educacion/);
+    assert.match(data.text,/Equipo de orientación · Portal piloto de posgrados/);
+    assert.doesNotMatch(data.text,/\+593991234567|prueba@example\.org/);
+    assert.match(data.headers['List-Unsubscribe'],/api\/preferences/);
     return Response.json({id:'externo-1'});
   });
   assert.equal((await runDueJobs(env,programs)).skipped,1);assert.equal(count,0);
@@ -104,6 +110,26 @@ test('correo de Resend respeta consentimiento y distingue la aceptación de la e
   for(let i=0;i<2;i++)assert.equal((await invoke(env,'/api/webhooks/resend',event,null,headers)).status,200);
   assert.equal(env.DB.raw.prepare('SELECT consent_email FROM leads').get().consent_email,0);
   assert.equal(env.DB.raw.prepare("SELECT COUNT(*) n FROM events WHERE type='correo'").get().n,1);
+});
+test('la bienvenida actual dirige a una confirmación privada disponible desde el correo',async t=>{
+  const env={DB:database(),OUTREACH_ENABLED:'true',RESEND_API_KEY:'prueba',RESEND_FROM:'prueba@example.org',PUBLIC_BASE_URL:base};
+  addLead(env.DB,true);
+  env.DB.raw.prepare('UPDATE leads SET pref_token=?').run('abcd'.repeat(16));
+  let confirmation;
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{
+    assert.equal(url,'https://api.resend.com/emails');
+    const {text}=JSON.parse(opts.body);
+    assert.match(text,/Confirma o corrige la maestría/);
+    confirmation=text.split('\n').find(line=>line.startsWith(base+'/confirmar/'));
+    return Response.json({id:'bienvenida-con-confirmacion'});
+  });
+  assert.equal((await runDueJobs(env,programs)).accepted,1);
+  assert.match(confirmation,/\/confirmar\/l1\.\d+\.[a-f0-9]{64}$/);
+  const {handleLeadConfirmation}=await import('../src/lead-confirmation.js');
+  const request=new Request(confirmation);
+  const preview=await handleLeadConfirmation(request,env,new URL(confirmation),programs);
+  assert.match(await preview.text(),/value="educacion" selected/);
+  assert.equal(env.DB.raw.prepare("SELECT COUNT(*) n FROM events WHERE type='confirmacion_interes'").get().n,0);
 });
 test('Twilio verifica la firma, crea una tarea de asesor y registra la baja por teclado',async()=>{
   const env={DB:database(),TWILIO_AUTH_TOKEN:'unidad',TWILIO_ACCOUNT_SID:'ACtest',PUBLIC_BASE_URL:base};

@@ -1,5 +1,6 @@
 import { all, channelPhone, clean, digest, e164, inHours, normalized, now, publicOrigin, requestRemote, select,
   ServiceError, templateLanguage, whatsappTemplate, whatsappWebhookReady } from './providers.js';
+import {conversationIntakeReady, ingestConversation} from './conversation-intake.js';
 
 const encoder = new TextEncoder();
 const json = (data,status=200) => Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -187,6 +188,28 @@ function providerPhone(number) {
   return e164(phone)?phone:'';
 }
 
+function retellUserTurns(call) {
+  const turns=list(call.transcript_object).filter(turn=>turn?.role==='user' && typeof turn.content==='string');
+  if(turns.length)return turns.map(turn=>clean(turn.content,1000)).filter(Boolean);
+  if(typeof call.transcript!=='string')return [];
+  return call.transcript.split(/\r?\n/).map(line=>line.match(/^\s*User:\s+(.+)$/i)?.[1]).filter(Boolean);
+}
+
+function retellOccurrence(call) {
+  const timestamp=call.end_timestamp||call.start_timestamp;
+  return Number.isFinite(timestamp) && timestamp>0 && timestamp<=8640000000000000?new Date(timestamp).toISOString():undefined;
+}
+
+async function captureRetellConversation(env,body,phone,leadId,allowCreate,turns) {
+  const call=body.call;
+  if(body.event!=='call_analyzed' || call.call_status!=='ended' || call.call_analysis?.in_voicemail===true ||
+    ['voicemail_reached','ivr_reached'].includes(call.disconnection_reason) || !turns.length || !await conversationIntakeReady(env.DB))return;
+  await ingestConversation(env,{
+    provider:'retell',eventId:call.call_id,leadId,phone:phone||undefined,
+    direction:call.direction,kind:'call',text:turns.map(turn=>'User: '+turn.replace(/\s+/g,' ')).join('\n').slice(0,4000),allowCreate,occurredAt:retellOccurrence(call)
+  });
+}
+
 export function explicitOptOut(value) {
   const phrase=normalized(clean(value,500)).replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
   const command=phrase.replace(/^(?:(?:por favor|hola|gracias|pero|si|ya) )+/,'');
@@ -278,18 +301,31 @@ async function retellWebhook(request,env) {
   const bytes=await bodyBytes(request,524288);
   if(!await signed(bytes,secret,signature[2],signature[1]))return json({error:'Firma de Retell no válida.'},403);
   const body=parseEvent(bytes), call=body.call;
-  if(!['call_started','call_ended','call_analyzed'].includes(body.event) || !knownId(call?.call_id) || call.direction!=='outbound' || call.call_type!=='phone_call')return retellAck();
-  const phone=providerPhone(call.to_number), sender=providerPhone(call.from_number);
-  if(!phone || !sender || !knownId(call.agent_id))return retellAck();
+  if(!['call_started','call_ended','call_analyzed'].includes(body.event) || !knownId(call?.call_id) ||
+    !['inbound','outbound'].includes(call.direction) || call.call_type!=='phone_call' || !knownId(call.agent_id))return retellAck();
+  const to=providerPhone(call.to_number), from=providerPhone(call.from_number);
+  const date=now();
+  if (call.direction==='inbound') {
+    if(!to || from===to || to!==env.RETELL_INBOUND_NUMBER || call.agent_id!==env.RETELL_INBOUND_AGENT_ID ||
+      (env.RETELL_INBOUND_AGENT_VERSION && String(call.agent_version)!==String(env.RETELL_INBOUND_AGENT_VERSION)))return retellAck();
+    const turns=retellUserTurns(call);
+    const declined=call.disconnection_reason==='user_requested_dnc' || (body.event==='call_analyzed' && call.call_analysis?.custom_analysis_data?.opt_out===true) ||
+      turns.some(explicitOptOut);
+    if(declined)await stopVoice(env.DB,from,date,'Baja solicitada durante una llamada.');
+    else await captureRetellConversation(env,body,from,undefined,!!from,turns);
+    return retellAck();
+  }
+  if(!to || !from)return retellAck();
   const jobId=call.metadata?.ucg_source===scope && knownId(call.metadata?.ucg_job_id)?call.metadata.ucg_job_id:'';
-  const job=await boundJob(env.DB,'retell',call.call_id,jobId,phone,call.agent_id,sender);
+  const job=await boundJob(env.DB,'retell',call.call_id,jobId,to,call.agent_id,from);
   if(!job || (/^\d+$/.test(job.version) && Number(job.version)!==call.agent_version))return retellAck();
 
-  const date=now(), id=await digest(call.call_id);
+  const id=await digest(call.call_id);
   const analysis=call.call_analysis?.custom_analysis_data;
+  const turns=retellUserTurns(call);
   const declined=call.disconnection_reason==='user_requested_dnc' || (body.event==='call_analyzed' && analysis?.opt_out===true) ||
-    list(call.transcript_object).some(turn=>turn?.role==='user' && explicitOptOut(turn.content));
-  if(declined)await stopVoice(env.DB,phone,date,'Baja solicitada durante una llamada.');
+    turns.some(explicitOptOut);
+  if(declined)await stopVoice(env.DB,to,date,'Baja solicitada durante una llamada.');
   if(body.event==='call_started') {
     await confirmState(env.DB,'retell',job,call.call_id,'started',1,'Retell confirmó que la llamada se conectó.',false,date);
   } else if(['error','not_connected','ended'].includes(call.call_status)) {
@@ -300,8 +336,9 @@ async function retellWebhook(request,env) {
   }
   const wantsAdvisor=call.disconnection_reason==='user_requested_callback' || (body.event==='call_analyzed' && analysis?.human_callback===true);
   if(!declined && wantsAdvisor && call.call_status==='ended' && call.disconnection_reason!=='voicemail_reached' && call.call_analysis?.in_voicemail!==true)
-    await moveToHuman(env.DB,job.lead_id,phone,'retell-callback:'+id,advisorTask,'El aspirante solicitó conversar con un asesor durante la llamada de orientación.',date,
+    await moveToHuman(env.DB,job.lead_id,to,'retell-callback:'+id,advisorTask,'El aspirante solicitó conversar con un asesor durante la llamada de orientación.',date,
       ' AND l.consent_voice=1 AND NOT EXISTS(SELECT 1 FROM voice_suppressions s WHERE s.phone=l.phone)');
+  if(!declined)await captureRetellConversation(env,body,to,job.lead_id,false,turns);
   return retellAck();
 }
 

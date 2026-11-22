@@ -1,4 +1,5 @@
 import {json, secretMatches} from './observability.js'
+import {runNurtureJobs} from './conversation-nurture.js'
 import {runIntelligenceCycle} from './intelligence.js'
 import {runDueJobs,runGrowthCycle} from './integrations.js'
 
@@ -16,6 +17,7 @@ export async function handleMaintenance(request,env,programs) {
   utcMonday.setUTCDate(utcMonday.getUTCDate() - (utcMonday.getUTCDay() + 6) % 7)
   const actions = [
     {kind:'seguimiento',slot:now.toISOString().slice(0,13),run:runDueJobs},
+    {kind:'conversaciones',slot:now.toISOString().slice(0,13),run:runNurtureJobs},
     {kind:'contenido',slot:utcMonday.toISOString().slice(0,10),run:runGrowthCycle},
     {kind:'captacion',slot:now.toISOString().slice(0,10),run:runIntelligenceCycle}
   ]

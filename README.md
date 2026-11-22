@@ -62,3 +62,18 @@ npm run dev
 ```
 
 Las pruebas usan datos ficticios y respuestas simuladas; no demuestran configuración real, entregabilidad, disponibilidad externa ni seguridad del proxy. Consultar [verificación v2](docs/verificacion-v2.md), [diseño operativo](docs/diseno-operativo.md) y [respuestas de admisiones](docs/respuestas-admisiones.md).
+
+## Portal, CRM y motor de contenidos
+
+[Vista de la plataforma](https://casa-grande-posgrados.francisco.chatgpt.site/plataforma) · [Portal de aspirantes](https://casa-grande-posgrados.francisco.chatgpt.site/) · [CRM de muestra](https://casa-grande-posgrados.francisco.chatgpt.site/crm) · [Motor de contenidos de muestra](https://casa-grande-posgrados.francisco.chatgpt.site/motor-de-contenidos). Las demostraciones usan ejemplos aislados. El equipo autorizado opera los expedientes y contenidos reales en `/equipo` y revisa sus canales en `/equipo/conexiones`.
+
+## Del primer contacto al seguimiento
+
+1. Resend notifica la recepción de un correo en el buzón de posgrados o en una dirección de respuesta asociada a un caso. Retell envía el análisis de la llamada y Twilio remite la respuesta hablada al menú de admisiones. Los canales verifican sus firmas y la cuenta o el destinatario antes de aceptar datos.
+2. La bandeja identifica la maestría, la intención, los obstáculos y el horizonte expresado. Conserva extractos breves como evidencia. Las identidades ambiguas o sin verificar pasan a revisión. Un contacto telefónico puede tener expediente sin dirección electrónica.
+3. El agente registra la próxima acción y su fundamento. Una nueva solicitud web con correo autorizado recibe una bienvenida en español para confirmar el programa y el horizonte. La página de confirmación aplica cambios solo al enviarse el formulario. Una consulta directa inicial por correo puede recibir una respuesta limitada a esa petición cuando la identidad y el contenido satisfacen los criterios de verificación. El permiso de seguimiento comercial se gestiona por separado.
+4. Las respuestas y bajas cambian la acción posterior. La bandeja conserva la decisión, el estado del envío y la próxima tarea. El despachador concurre con seguridad, limita la frecuencia y distingue una aceptación del proveedor de una entrega confirmada. El equipo conserva las decisiones académicas y revisa casos dudosos.
+
+En el piloto la dirección de contacto es `posgrados-ucg@mail.coninteligensia.com`. Para migrar el remitente, verificar en Resend el dominio aprobado y actualizar los secretos del servidor antes de volver a publicar. La comprobación protegida `POST /api/maintenance/correo/prueba` envía una sola sonda al alias técnico del propio buzón y `GET` muestra si su contenido pudo leerse tras el webhook. La sonda no crea aspirantes.
+
+Para el canal de voz entrante configura `RETELL_INBOUND_NUMBER`, `RETELL_INBOUND_AGENT_ID` y el secreto de firma de Retell, o `TWILIO_INBOUND_NUMBER` junto con las credenciales de la cuenta Twilio. Los puntos de recepción y la última conversación registrada por canal están en el panel privado. Ninguna clave de servicio se guarda en Git.

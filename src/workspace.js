@@ -1,3 +1,5 @@
+import { contactEmail } from './contact-identity.js';
+
 const CLOSED = new Set(['Cerrado', 'Matriculado']);
 const STAGES = ['Nuevo', 'En orientación', 'En postulación', 'Admitido', 'Matriculado', 'Cerrado'];
 const CHECKLIST = [
@@ -89,7 +91,7 @@ function rowView(row) {
       admissionVerified:!!row.admission_evidence_id,enrollmentVerified:!!row.enrollment_evidence_id
     },
     student:{
-      name:row.name,email:row.email,phone:row.phone,
+      name:row.name,email:contactEmail(row.email),phone:row.phone,
       consentEmail:!!row.consent_email,consentVoice:!!row.consent_voice,consentWhatsapp:!!row.whatsapp_consent
     },
     nextStep:{title:row.next_action,dueAt:row.due_at || null},
@@ -113,7 +115,7 @@ export async function workspaceList(db,url) {
   const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50',10) || 50));
   const offset = Math.min(1000000, Math.max(0, parseInt(url.searchParams.get('offset') || '0',10) || 0));
   const filter = ` WHERE ?1 IS NOT NULL AND ?2 IS NOT NULL AND (${queue[2]})
-    AND (?3='' OR l.stage=?3) AND (?4='' OR l.name LIKE ?4 ESCAPE '!' OR l.email LIKE ?4 ESCAPE '!'
+    AND (?3='' OR l.stage=?3) AND (?4='' OR l.name LIKE ?4 ESCAPE '!' OR (l.email NOT LIKE 'intake:phone:%' AND l.email LIKE ?4 ESCAPE '!')
       OR l.phone LIKE ?4 ESCAPE '!' OR l.program LIKE ?4 ESCAPE '!' OR l.owner LIKE ?4 ESCAPE '!')`;
   const order = ` ORDER BY (${REPLIES}) DESC,${selected==='decision'?'c.decision_at IS NULL,c.decision_at,':''}
     l.due_at IS NULL, l.due_at, l.score DESC,l.updated_at DESC,l.id`;

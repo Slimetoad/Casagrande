@@ -58,11 +58,14 @@ function crumbs(items) {
   return `<nav class="crumbs" aria-label="Ruta de navegación"><a href="/">Posgrados</a>${items.map(([label,url])=>`<span aria-hidden="true">/</span>${url ? `<a href="${escape(url)}">${escape(label)}</a>` : `<span aria-current="page">${escape(label)}</span>`}`).join("")}</nav>`;
 }
 function header(path) {
-  const nav = [["/programas","Maestrías"],["/orientacion","Orientación"],["/financiamiento","Simulador"],["/guias","Guías"]];
-  return `<a class="skip-link" href="#contenido">Saltar al contenido</a><header class="masthead"><div class="nav-wrap"><a class="brand-lock" aria-label="Universidad Casa Grande, inicio de Posgrados" href="/"><img src="${logo}" alt="Universidad Casa Grande" width="500" height="158"><span>Posgrados</span></a><button id="menu-toggle" type="button" class="icon-button menu-toggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="site-nav">${icon("menu")}</button><nav id="site-nav" aria-label="Navegación principal">${nav.map(([href,title])=>`<a ${path.startsWith(href)?'aria-current="page"':''} href="${href}">${title}</a>`).join("")}<a class="button-nav" href="/solicitar?origen=navegacion">Solicitar información ${icon("external",16)}</a></nav></div></header>`;
+  const overview = path === "/plataforma";
+  const nav = overview ? [["/","Portal del aspirante"],["/crm","CRM de muestra"],["/motor-de-contenidos","Motor de contenidos"]]
+    : [["/programas","Maestrías"],["/orientacion","Orientación"],["/financiamiento","Simulador"],["/guias","Guías"]];
+  const [buttonUrl,buttonLabel,buttonIcon] = overview ? ["/equipo","Acceso interno","shield"] : ["/solicitar?origen=navegacion","Solicitar información","external"];
+  return `<a class="skip-link" href="#contenido">Saltar al contenido</a><header class="masthead"><div class="nav-wrap"><a class="brand-lock" aria-label="Universidad Casa Grande, inicio de Posgrados" href="/"><img src="${logo}" alt="Universidad Casa Grande" width="500" height="158"><span>Posgrados</span></a><button id="menu-toggle" type="button" class="icon-button menu-toggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="site-nav">${icon("menu")}</button><nav id="site-nav" aria-label="Navegación principal">${nav.map(([href,title])=>`<a ${!overview && path.startsWith(href)?'aria-current="page"':''} href="${href}">${title}</a>`).join("")}<a class="button-nav" href="${buttonUrl}">${buttonLabel} ${icon(buttonIcon,16)}</a></nav></div></header>`;
 }
 function footer(institutionalLive) {
-  return `<footer class="footer"><div class="wrap"><div class="footer-grid"><div><a class="footer-brand" href="/"><img src="/media/ucg-logo-light.png" alt="Universidad Casa Grande"></a><p>Posgrados · Guayaquil, Ecuador</p></div><div><strong>Explora</strong><a href="/programas">Maestrías</a><a href="/orientacion">Orientación</a><a href="/guias">Guías de posgrado</a></div><div><strong>Admisiones</strong><a href="/solicitar?origen=pie">Solicitar información</a><a href="/cita">Agendar una cita</a><a href="/financiamiento">Simulador de inversión</a><a href="tel:+59343726250">+593 4 372 6250</a></div></div>${institutionalLive?"":`<p class="pilot-footer">${pilotCopy}</p>`}<div class="footer-base"><a href="${official}" rel="external noreferrer">Sitio institucional de UCG</a><a href="${privacy}" rel="external noreferrer">Privacidad</a><a href="/equipo">Acceso del equipo</a></div></div></footer>`;
+  return `<footer class="footer"><div class="wrap"><div class="footer-grid"><div><a class="footer-brand" href="/"><img src="/media/ucg-logo-light.png" alt="Universidad Casa Grande"></a><p>Posgrados · Guayaquil, Ecuador</p></div><div><strong>Explora</strong><a href="/programas">Maestrías</a><a href="/orientacion">Orientación</a><a href="/guias">Guías de posgrado</a></div><div><strong>Admisiones</strong><a href="/solicitar?origen=pie">Solicitar información</a><a href="/cita">Agendar una cita</a><a href="/financiamiento">Simulador de inversión</a><a href="tel:+59343726250">+593 4 372 6250</a></div></div>${institutionalLive?"":`<p class="pilot-footer">${pilotCopy}</p>`}<div class="footer-base"><a href="${official}" rel="external noreferrer">Sitio institucional de UCG</a><a href="${privacy}" rel="external noreferrer">Privacidad</a><a href="/plataforma">Ver la plataforma</a><a href="/equipo">Acceso del equipo</a></div></div></footer>`;
 }
 function assistantWidget() {
   return `<button class="chat-launch" id="chat-launch" type="button" aria-label="Abrir asistente de posgrados" aria-expanded="false" aria-controls="chat-panel">${icon("chat",22)}<span>¿Te orientamos?</span></button><aside class="chat-panel" id="chat-panel" aria-label="Asistente de posgrados" hidden><div class="chat-head"><div><small>Posgrados UCG</small><strong>Asistente de orientación</strong></div><button type="button" class="icon-button" id="chat-close" aria-label="Cerrar asistente">${icon("close")}</button></div><div class="chat-log" id="chat-log" role="log" aria-live="polite"><p class="chat-answer">Hola. Puedo ayudarte a explorar las maestrías y encontrar dónde consultar requisitos o inversión.</p></div><div id="chat-options" class="chat-options"><button type="button">¿Qué maestrías hay?</button><button type="button">¿Cómo consulto el costo?</button></div><form id="chat-form"><label class="sr-only" for="chat-msg">Tu pregunta</label><input id="chat-msg" name="message" placeholder="Escribe tu pregunta" maxlength="800" required autocomplete="off"><button type="submit">Enviar</button></form><div class="chat-fine">Asistente virtual · <a href="/solicitar?origen=asistente">Hablar con admisiones</a></div></aside>`;
@@ -107,6 +110,75 @@ function home(ps) {
     <figure><img src="${campus}" width="575" height="800" alt="Fachada del campus de la Universidad Casa Grande en Guayaquil" loading="lazy"><span aria-hidden="true"></span></figure>
   </div></section>
   <section class="wrap content-section faq-grid">${heading("Admisiones","Antes de elegir")}<div>${faqList()}</div></section>`;
+}
+function platform(ps) {
+  return `<div class="platform">
+    <section class="platform-hero"><div class="wrap">
+      ${crumbs([["Plataforma"]])}
+      <div class="platform-intro"><div>
+        ${kicker("Universidad Casa Grande")}
+        <h1>Plataforma de <em>Posgrados.</em></h1>
+        <p>Explora cómo se conectan la orientación al aspirante, el seguimiento de admisiones y la planificación editorial.</p>
+        ${link("#espacios","Ver los espacios","primary","down")}
+      </div>
+      <figure><img src="${campus}" width="575" height="800" alt="Fachada de la Universidad Casa Grande" fetchpriority="high"><figcaption>${icon("pin",17)} Guayaquil, Ecuador</figcaption></figure>
+      </div>
+    </div></section>
+    <section class="wrap content-section platform-spaces" id="espacios" aria-labelledby="platform-spaces-title">
+      <h2 id="platform-spaces-title">Elige por dónde empezar</h2>
+      <div class="platform-grid">
+        <article class="platform-card">
+          <div class="platform-preview platform-portal-preview">
+            <img src="${hero}" width="1210" height="1550" alt="" loading="lazy">
+            <nav aria-label="Herramientas del portal">
+              <a href="/programas">${icon("book",17)} ${ps.length} maestrías</a>
+              <a href="/orientacion">${icon("compass",17)} Test de orientación</a>
+              <a href="/cita">${icon("calendar",17)} Agenda de citas</a>
+            </nav>
+          </div>
+          <div class="platform-card-content">
+            ${kicker("Para aspirantes")}
+            <h3>Portal del aspirante</h3>
+            <p>Explora programas, compara fichas y prepara tu presupuesto o una consulta con admisiones.</p>
+            ${link("/","Ir al portal","primary","arrow")}
+          </div>
+        </article>
+        <article class="platform-card">
+          <div class="platform-preview platform-crm-preview">
+            <div class="platform-preview-panel"><strong>${icon("layers",18)} Seguimiento inicial</strong>
+              <ol><li>Nuevo</li><li>En orientación</li><li>En postulación</li></ol>
+            </div>
+          </div>
+          <div class="platform-card-content">
+            ${kicker("Demostración pública")}
+            <h3>CRM de admisiones</h3>
+            <p>Consulta expedientes de ejemplo y prueba el seguimiento de casos, las tareas y la agenda con datos ficticios.</p>
+            ${link("/crm","Abrir demostración del CRM","outline","arrow")}
+          </div>
+        </article>
+        <article class="platform-card">
+          <div class="platform-preview platform-engine-preview">
+            <div class="platform-preview-panel"><strong>${icon("search",18)} Flujo editorial</strong>
+              <ol><li>Tema de búsqueda</li><li>Propuesta de contenido</li><li>Revisión editorial</li></ol>
+            </div>
+          </div>
+          <div class="platform-card-content">
+            ${kicker("Demostración pública")}
+            <h3>Motor de contenidos</h3>
+            <p>Recorre ejemplos de oportunidades de búsqueda y propuestas de contenido que pasan por revisión editorial antes de publicarse.</p>
+            ${link("/motor-de-contenidos","Abrir motor de contenidos","outline","arrow")}
+          </div>
+        </article>
+      </div>
+    </section>
+    <section class="platform-staff"><div class="wrap">
+      <div class="platform-staff-copy"><span aria-hidden="true">${icon("shield",26)}</span><div>
+        <h2>Acceso interno para admisiones</h2>
+        <p>El equipo autorizado entra a su espacio de trabajo para consultar expedientes y administrar la operación.</p>
+      </div></div>
+      ${link("/equipo","Ir al acceso del equipo","outline","arrow")}
+    </div></section>
+  </div>`;
 }
 function faqList() {
   const faqs = [
@@ -226,6 +298,7 @@ export function renderStudent(path, programs, options={}) {
   const pathname = location.pathname.replace(/\/$/, "") || "/";
   const parts = pathname.split("/").filter(Boolean);
   const pages = {"/":["Posgrados en Ecuador","Explora las maestrías de la Universidad Casa Grande en Guayaquil. Compara programas, planifica tu inversión y recibe orientación de admisiones.",()=>home(ps)],"/programas":["Maestrías y programas de posgrado","Busca y compara las maestrías de la Universidad Casa Grande por área de estudio y formato.",()=>catalog(ps,location.searchParams)],"/orientacion":["Test de orientación de posgrados","Responde tres preguntas y descubre las maestrías que se ajustan a tus intereses.",()=>quiz()],"/financiamiento":["Simulador de inversión para tu maestría","Estima tu presupuesto mensual para una maestría, con tus propios valores, aporte inicial y plazo.",()=>finance(ps)],"/solicitar":["Solicitar información de posgrados","Consulta al equipo de admisiones sobre maestrías, requisitos, inversión y convocatoria.",()=>requestInfo(ps,options.institutionalLive)],"/guias":["Guías para estudiar una maestría","Encuentra recursos y herramientas para elegir un programa, preparar tu presupuesto y avanzar en tu postulación.",()=>guides(options.articles||[])]};
+  pages["/plataforma"] = ["Plataforma de Posgrados", "Recorre el portal del aspirante, la demostración del CRM de admisiones y el motor de contenidos.", () => platform(ps)];
   const p = parts[0]==="programas" && parts.length===2 ? ps.find(i=>i.slug===parts[1]) : null;
   const a = parts[0]==="guias" && parts.length===2 ? (options.articles||[]).find(i=>i.slug===parts[1]) : null;
   if (pathname === "/cita" && typeof options.appointmentHtml === "string") pages["/cita"] = ["Agendar una cita de posgrados", "Elige un horario para conversar con admisiones de Universidad Casa Grande.", () => options.appointmentHtml];
@@ -238,6 +311,7 @@ export function renderStudent(path, programs, options={}) {
   if(p) schema.push({"@context":"https://schema.org","@type":"Course","name":p.title,"description":desc,"provider":org,"inLanguage":"es",...(canonical?{url:canonical}:{}),sameAs:safeUrl(p.url)});
   if(a) schema.push({"@context":"https://schema.org","@type":"Article",headline:a.title,description:desc, ...(a.published_at?{datePublished:a.published_at}:{})});
   if (origin && parts.length) { const intermediate = parts.length===2 ? [{"@type":"ListItem",position:2,name:p?"Maestrías":"Guías",item:origin+"/"+parts[0]}] : []; schema.push({"@context":"https://schema.org","@type":"BreadcrumbList",itemListElement:[{"@type":"ListItem",position:1,name:"Posgrados",item:origin+"/"},...intermediate,{"@type":"ListItem",position:intermediate.length+2,name:title,item:canonical}]}); }
+  const pageImage = p ? imageOf(p) : pathname === "/plataforma" ? campus : hero;
   const data = ps.map(({slug,title,area,mode,family,duration,price,admissionsStatus})=>({slug,title,area,mode,family,duration,price,admissionsStatus}));
-  return `<!doctype html><html lang="es-EC"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f7f3"><meta name="robots" content="${options.indexable && entry ? "index,follow":"noindex,nofollow"}"><title>${escape(title)} | Universidad Casa Grande</title><meta name="description" content="${escape(desc)}">${canonical?`<link rel="canonical" href="${escape(canonical)}"><meta property="og:url" content="${escape(canonical)}">`:""}<meta property="og:type" content="${a?"article":"website"}"><meta property="og:locale" content="es_EC"><meta property="og:site_name" content="Posgrados UCG"><meta property="og:title" content="${escape(title)} | Universidad Casa Grande"><meta property="og:description" content="${escape(desc)}"><meta property="og:image" content="${escape(origin+(p?imageOf(p):hero))}"><link rel="stylesheet" href="/student.css"><script type="application/ld+json">${json(schema)}</script></head><body class="${p?"page-program":pathname==="/"?"page-home":pathname==="/programas"?"page-catalog":""}">${header(pathname)}<main id="contenido" tabindex="-1">${content()}</main>${footer(options.institutionalLive)}${assistantWidget()}<script id="catalog-data" type="application/json">${json(data)}</script><script src="/student-client.js" defer></script></body></html>`;
+  return `<!doctype html><html lang="es-EC"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f7f3"><meta name="robots" content="${options.indexable && entry ? "index,follow":"noindex,nofollow"}"><title>${escape(title)} | Universidad Casa Grande</title><meta name="description" content="${escape(desc)}">${canonical?`<link rel="canonical" href="${escape(canonical)}"><meta property="og:url" content="${escape(canonical)}">`:""}<meta property="og:type" content="${a?"article":"website"}"><meta property="og:locale" content="es_EC"><meta property="og:site_name" content="Posgrados UCG"><meta property="og:title" content="${escape(title)} | Universidad Casa Grande"><meta property="og:description" content="${escape(desc)}"><meta property="og:image" content="${escape(origin+pageImage)}"><link rel="stylesheet" href="/student.css"><script type="application/ld+json">${json(schema)}</script></head><body class="${p?"page-program":pathname==="/"?"page-home":pathname==="/programas"?"page-catalog":pathname==="/plataforma"?"page-platform":""}">${header(pathname)}<main id="contenido" tabindex="-1">${content()}</main>${footer(options.institutionalLive)}${pathname==="/plataforma"?"":assistantWidget()}<script id="catalog-data" type="application/json">${json(data)}</script><script src="/student-client.js" defer></script></body></html>`;
 }

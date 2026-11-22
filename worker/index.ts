@@ -3,6 +3,7 @@ import {serve} from '../src/portal.js'
 import {renderManual} from '../src/manual.js'
 import {programs} from '../src/catalog.js'
 import {followupOnCapture} from '../src/capture-followup.js'
+import {withConversationWake} from '../src/conversation-wake.js'
 const worker = {
   fetch(request:Request,env:Cloudflare.Env,ctx:ExecutionContext) {
     const path = new URL(request.url).pathname
@@ -10,7 +11,8 @@ const worker = {
     const onLeadCreated = request.method==='POST' && /^\/api\/leads\/?$/.test(path)
       ? followupOnCapture(env,ctx,programs)
       : undefined
-    return serve(request,env,renderManual,onLeadCreated)
+    const runtime = request.method==='POST' && path.startsWith('/api/webhooks/') ? withConversationWake(env,ctx,programs) : env
+    return serve(request,runtime,renderManual,onLeadCreated)
   }
 }
 export default worker

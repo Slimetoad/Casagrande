@@ -1,0 +1,18 @@
+# Verificación independiente de conversaciones
+
+Las comprobaciones usan el router de la aplicación, las migraciones SQL numeradas y SQLite en memoria. Se firmaron eventos con secretos ficticios y las peticiones al proveedor se sustituyeron por respuestas simuladas. No se llamó a personas ni se enviaron mensajes reales. La ejecución `node --test tests/judge-conversation.mjs` terminó con **11 pruebas aprobadas**. En la misma instantánea, `npm test` terminó con **112 pruebas aprobadas**, incluidas las pruebas del cliente que ejercitan el simulador y la publicación de contenido en memoria.
+
+| Escenario | Resultado comprobado |
+| --- | --- |
+| Respuesta a alias de correo | Una firma inválida, un destinatario desconocido o un remitente ajeno no modifican el expediente. Una entrega repetida conserva una sola respuesta y una tarea pendiente. La ruta del expediente exige identidad de personal autorizada. |
+| Correo directo a admisiones | Un remitente autenticado con DMARC de prueba genera un expediente y una conversación visible al personal; se identifican programa e intención. Pedir una llamada no activa permisos de correo o voz ni crea trabajos promocionales. El texto sensible de ejemplo se elimina de la extracción, del extracto guardado y de los eventos. |
+| Autenticación o dirección insuficiente | Un destinatario solo indirecto no activa la lectura del cuerpo; un remitente cuya autenticación falla queda para revisión sin crear prospecto ni seguimiento, sin conservar en esa ficha la dirección de prueba. |
+| Llamadas Retell | Firma inválida y agente ajeno rechazados o ignorados. Inicio previo y análisis repetido producen una conversación; se extraen solo turnos del aspirante y no se crean permisos. Una llamada sin número queda sin asignar y no crea expediente ni trabajos. |
+| Llamada Twilio | Una firma inválida se rechaza y una transcripción firmada repetida genera una sola conversación, con la intención de hablar con una asesora y permisos desactivados. |
+| Respuesta contextual | Una consulta directa simulada con respuesta contextual encolada y dos despachadores concurrentes origina una sola petición simulada. Una baja firmada antes del despacho anula el trabajo y no produce ninguna petición. En ambos casos el permiso de seguimiento por correo permanece desactivado. |
+| Eventos fuera de orden | Una consulta anterior recibida después de otra queda marcada como superada y no reemplaza ni duplica el trabajo más reciente. |
+| Demostraciones | `/crm`, `/motor-de-contenidos` y `/equipo?demo=1` muestran modo ficticio sin escribir en la base y sin mostrar el contacto real de prueba. `/api/demo/conversacion` entrega hechos y un plan para correo y llamada sin modificar la base ni llamar proveedores. |
+
+Durante la revisión se detectó que un extracto de correo podía persistir sin redacción en el historial. Se corrigió la escritura y se verificó que el correo privado de prueba no aparezca en `admissions_replies` ni en `events`. La prueba no certifica la eliminación de todos los datos sensibles posibles ni valida datos anteriores a la corrección.
+
+La respuesta contextual directa es una respuesta única a una consulta entrante verificada; no convierte la consulta en consentimiento de seguimiento. Las pruebas de baja la recibieron antes de iniciar la petición al proveedor; no demuestran la cancelación de una petición que ya salió o fue aceptada. Los datos y firmas simulados no prueban autenticación real de Resend, funcionamiento de números, agentes o configuración de webhooks, entregabilidad, ejecución en D1 remoto, comportamiento de llamadas reales ni la protección del proxy de identidad. La clasificación automática requiere revisión humana cuando el texto o la identidad son ambiguos.

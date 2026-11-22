@@ -1,3 +1,9 @@
+import {demoConversation} from './conversation-demo.js'
+import {handleConversations} from './conversation-intake.js'
+import {handleNurture} from './conversation-nurture.js'
+import {handleMailCheck} from './mail-loopback.js'
+import {handleLeadConfirmation} from './lead-confirmation.js'
+import {connectionPage} from './connections.js'
 import { handleAppointments } from './appointments.js'
 import { appointmentForm } from './appointment-view.js'
 import { collectHub,conversionPage } from './conversion.js'
@@ -12,8 +18,9 @@ import { handleMetrics, json, allowPublicAction, secretMatches } from './observa
 import { handleMaintenance } from './maintenance.js'
 
 const escape = s=>String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
-const staffPaths = new Set(['/equipo','/equipo/manual','/equipo/conversion','/equipo/verificacion'])
-const publicPages = new Set(['/','/programas','/orientacion','/financiamiento','/solicitar','/guias','/cita'])
+const staffPaths = new Set(['/equipo','/equipo/manual','/equipo/conversion','/equipo/verificacion','/equipo/conexiones'])
+const publicWorkspaces = new Set(['/crm','/motor-de-contenidos'])
+const publicPages = new Set(['/plataforma','/','/programas','/orientacion','/financiamiento','/solicitar','/guias','/cita'])
 export async function resolveOperator(request,env) {
   const address = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase()
   const id = request.headers.get('oai-authenticated-user-id')
@@ -49,6 +56,7 @@ async function route(request,env,url,manual,onLeadCreated) {
     const res=await route(new Request(request.url,{method:'GET',headers:request.headers}),env,url,manual)
     return new Response(null,{status:res.status,headers:res.headers})
   }
+  if (path === '/api/maintenance/correo/prueba') return handleMailCheck(request,env)
   if (path === '/api/maintenance') return handleMaintenance(request,env,programs)
   if (!['GET','HEAD'].includes(method)) {
     const from = request.headers.get('origin')
@@ -56,14 +64,16 @@ async function route(request,env,url,manual,onLeadCreated) {
     const size = Number(request.headers.get('content-length') || 0)
     if (size > 128000) return json({error:'La solicitud es demasiado grande.'},413)
   }
+  if (path.startsWith('/confirmar/')) return handleLeadConfirmation(request,env,url,programs)
   if (path === '/robots.txt') {
-    return new Response(indexable ? `User-agent: *\nAllow: /\nDisallow: /equipo\nDisallow: /api/\nDisallow: /preferencias/\nSitemap: ${origin}/sitemap.xml\n` : 'User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}})
+    return new Response(indexable ? `User-agent: *\nAllow: /\nDisallow: /equipo\nDisallow: /crm\nDisallow: /motor-de-contenidos\nDisallow: /api/\nDisallow: /preferencias/\nDisallow: /confirmar/\nSitemap: ${origin}/sitemap.xml\n` : 'User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}})
   }
   if (path === '/sitemap.xml') {
     const articles = await publicArticles(env)
     const urls = [...publicPages,...programs.map(p=>'/programas/'+p.slug),...(articles||[]).map(p=>'/guias/'+p.slug)]
     return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p=>`<url><loc>${escape(origin+p)}</loc></url>`).join('')}</urlset>`,{headers:{'Content-Type':'application/xml; charset=utf-8'}})
   }
+  if(path==='/api/demo/conversacion')return demoConversation(request,programs,origin)
   const isStaff = path.startsWith('/api/staff/') || staffPaths.has(path)
   const operator = isStaff ? await resolveOperator(request,env) : null
   if (path.startsWith('/api/staff/') && !operator) return json({error:'Esta sección requiere acceso del equipo de admisiones.'},403)
@@ -73,15 +83,17 @@ async function route(request,env,url,manual,onLeadCreated) {
       if (!await allowPublicAction(request,env,path,limit)) return json({error:'Has realizado varias solicitudes. Inténtalo más tarde.'},429)
     }
     if(path==='/api/hubs')return collectHub(request,env,programs)
-    const next = await handleAppointments(request,env,url,programs,operator) || await handleIntelligence(request,env,url,programs,operator)
+    const next = await handleConversations(request,env,url,programs,operator) || await handleNurture(request,env,url,programs,operator) || await handleAppointments(request,env,url,programs,operator) || await handleIntelligence(request,env,url,programs,operator)
     if(next)return next
     const res = await handleMetrics(request,env,path,operator) || await handleAdvisor(request,env,url,programs,operator) || await handleAdmissions(request,env,url,programs,operator,onLeadCreated) || await handleIntegrations(request,env,url,programs,operator)
     return res || json({error:'Ruta no disponible.'},404)
   }
   if (method !== 'GET') return json({error:'Método no permitido.'},405)
+  if (publicWorkspaces.has(path)) return html(renderCRM(path,{demo:true,programs}),200,true)
   if (staffPaths.has(path)) {
     if (!operator && path === '/equipo' && url.searchParams.get('demo') === '1') return html(renderCRM(path,{demo:true,programs}),200,true)
     if (!operator) return notice('Acceso a admisiones','Ingresa con una cuenta autorizada por el equipo de admisiones.','/signin-with-chatgpt?return_to='+encodeURIComponent(path),'Iniciar sesión con ChatGPT',403)
+    if (path === '/equipo/conexiones') return html(await connectionPage(env),200,true)
     if (path === '/equipo/conversion') return html(await conversionPage(env,programs),200,true)
     if (path === '/equipo/manual' || path === '/equipo/verificacion') return html(manual(path.split('/').at(-1)),200,true)
     return html(renderCRM(path,{operator,programs}),200,true)
@@ -100,11 +112,12 @@ async function route(request,env,url,manual,onLeadCreated) {
 }
 export async function serve(request,env,manual,onLeadCreated) {
   const url = new URL(request.url)
-  const privatePage = env.SEO_INDEXABLE !== 'true' || url.origin !== originFor(env,url) || /^\/(equipo|api|preferencias)(\/|$)/.test(url.pathname)
+  const privatePage = env.SEO_INDEXABLE !== 'true' || url.origin !== originFor(env,url) || publicWorkspaces.has(url.pathname.replace(/\/+$/,'')) || /^\/(equipo|api|preferencias|confirmar)(\/|$)/.test(url.pathname)
   try {
     return secured(await route(request,env,url,manual,onLeadCreated),privatePage)
   } catch (e) {
-    console.error('Error de servicio',url.pathname.split('/').slice(0,3).join('/'),e?.name)
+    const category=url.pathname.split('/').slice(0,2).join('/')
+    console.error('Error de servicio',category,e?.name)
     return secured(url.pathname.startsWith('/api/') ? json({error:'El servicio no está disponible temporalmente. Vuelve a intentarlo.'},503) : notice('No pudimos cargar esta página','Vuelve a intentarlo en unos momentos.','/','Volver a posgrados',503),true)
   }
 }

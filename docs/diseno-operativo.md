@@ -105,3 +105,9 @@ El panel de captación reúne señales de búsqueda, consultas y avances e ident
 Los canales necesitan permisos separados. Correo, WhatsApp y voz admiten bajas y verificaciones del proveedor; tras una aceptación o un resultado incierto, el equipo debe conciliar el estado antes de repetir. La configuración de Retell y WhatsApp requiere verificar cuenta, origen HTTPS, agente o plantillas aprobadas, firmas, eventos de entrega, baja y atención humana con destinatarios internos autorizados. Consultar los nombres de variables y la activación del programador en el README del proyecto.
 
 La [verificación independiente](/equipo/verificacion) describe los escenarios locales ejecutados, las fuentes académicas comprobadas y sus límites. Antes de abrir una cohorte, contrastar los datos de cada programa y verificar identidad del personal, migración D1, remitentes, calendario operativo y resultados de proveedores en el entorno real.
+
+## Correo y llamadas en el expediente
+
+La bandeja de conversaciones del CRM muestra el canal, la intención de la persona, los datos extraídos y la evidencia textual. Al abrir el expediente, el equipo puede ver la acción decidida por el agente y el resultado del intento de contacto. Una solicitud directa verificada puede generar una sola respuesta contextual. Los contactos que requieren resolver una ambigüedad de identidad o de contenido quedan para revisión del equipo.
+
+Consulta [Conexiones de admisiones](/equipo/conexiones) para ver qué servicios están configurados. [La plataforma](/plataforma) permite abrir el sitio y las demostraciones públicas del CRM y del motor de contenidos sin exponer expedientes reales.

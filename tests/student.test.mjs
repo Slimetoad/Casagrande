@@ -58,6 +58,28 @@ test("appointment pages can use the public navigation and disclosure", () => {
   assert.match(html, /class="pilot-footer"/);
 });
 
+test("platform overview connects the live public spaces and separates staff access", async () => {
+  const { serve } = await import("../src/portal.js");
+  const origin = "https://posgrados.example.invalid";
+  const visit = path => serve(new Request(origin + path), {PUBLIC_BASE_URL:origin}, () => "");
+  const overview = await visit("/plataforma");
+  assert.equal(overview.status, 200);
+  const page = await overview.text();
+  assert.match(page, /Plataforma de <em>Posgrados\.<\/em>/);
+  assert.equal([...page.matchAll(/>Demostración pública<\/div>/g)].length, 2);
+  for (const path of ["/","/crm","/motor-de-contenidos"]) {
+    assert.ok(page.includes('href="' + path + '"'));
+    const response = await visit(path);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /href="\/plataforma"/);
+    if (path !== "/") assert.match(html, /data-initial-mode="demo"/);
+    else assert.match(html, /<footer\b[\s\S]+href="\/plataforma">Ver la plataforma<\/a>/);
+  }
+  assert.match(page, /href="\/equipo">Acceso interno/);
+  assert.equal((await visit("/equipo")).status, 403);
+});
+
 function testElement(initial = {}) {
   const listeners = new Map();
   return {

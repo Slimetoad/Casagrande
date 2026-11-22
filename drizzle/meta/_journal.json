@@ -15,6 +15,13 @@
       "when": 1795383354273,
       "tag": "0001_admisiones_omnicanal",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795384314635,
+      "tag": "0002_conversaciones_admisiones",
+      "breakpoints": true
     }
   ]
 }

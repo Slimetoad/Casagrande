@@ -1,4 +1,5 @@
 import { integrationDashboard } from './integrations.js';
+import { contactEmail } from './contact-identity.js';
 import { InputError, caseChanges, dateOrNull, hasCaseFields, tableExists, workspaceList, workspaceDetail } from './workspace.js';
 
 const STAGES = ['Nuevo', 'En orientación', 'En postulación', 'Admitido', 'Matriculado', 'Cerrado'];
@@ -171,7 +172,7 @@ function whatsappJob(db,id,kind,due,now,marker='') {
 function leadView(row) {
   let context = {};
   try { context = JSON.parse(row.context); } catch { /* Records from earlier versions can omit context. */ }
-  return {id:row.id,name:row.name,email:row.email,phone:row.phone,program:row.program,source:row.source,
+  return {id:row.id,name:row.name,email:contactEmail(row.email),phone:row.phone,program:row.program,source:row.source,
     stage:row.stage,owner:row.owner,note:row.note,nextAction:row.next_action,dueAt:row.due_at,
     paused:!!row.paused,consentEmail:!!row.consent_email,consentVoice:!!row.consent_voice,consentWhatsapp:!!row.whatsapp_consent,
     createdAt:row.created_at,updatedAt:row.updated_at,context,score:row.score,
@@ -211,7 +212,7 @@ async function listLeads(db,url) {
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '100',10) || 100));
   const offset = Math.min(1000000, Math.max(0, parseInt(url.searchParams.get('offset') || '0',10) || 0));
   const pattern = '%' + query.replace(/[!%_]/g, c => '!' + c) + '%';
-  const filter = " WHERE (?='' OR stage=?) AND (?='' OR name LIKE ? ESCAPE '!' OR email LIKE ? ESCAPE '!' OR phone LIKE ? ESCAPE '!' OR program LIKE ? ESCAPE '!' OR owner LIKE ? ESCAPE '!')";
+  const filter = " WHERE (?='' OR stage=?) AND (?='' OR name LIKE ? ESCAPE '!' OR (email NOT LIKE 'intake:phone:%' AND email LIKE ? ESCAPE '!') OR phone LIKE ? ESCAPE '!' OR program LIKE ? ESCAPE '!' OR owner LIKE ? ESCAPE '!')";
   const params = [stage,stage,query,pattern,pattern,pattern,pattern,pattern];
   const modern = await tableExists(db,'admissions_cases');
   const [rows,count] = await db.batch([

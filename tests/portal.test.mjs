@@ -71,7 +71,7 @@ test('las métricas se agregan y la ejecución del programador respeta la config
   const repeat=await (await invoke(env,'/api/maintenance','POST',{},h)).json()
   assert.ok(repeat.procesos.every(x=>x.estado==='ya_procesado'))
   const log=await (await invoke(env,'/api/maintenance','GET',undefined,h)).json()
-  assert.equal(log.ejecuciones.length,3)
+  assert.equal(log.ejecuciones.length,4)
 })
 
 test('la medición de fichas respeta GPC y DNT y el tablero de conversión requiere identidad',async()=>{
@@ -107,3 +107,30 @@ test('la exportación al calendario utiliza un identificador estable distinto de
   const client=readFileSync(new URL('../public/citas.js',import.meta.url),'utf8')
   assert.match(client,/'UID:'\+a\.calendarId\+/);assert.doesNotMatch(client,/'UID:'\+key/)
 })
+
+test('la sonda técnica de correo requiere acceso de servicio y solo escribe su propia verificación', async t=>{
+  const env={...envFor(),RESEND_FROM:'Orientación <posgrados@example.org>',RESEND_ADMISSIONS_INBOUND_ADDRESS:'posgrados@example.org',RESEND_API_KEY:'test-service',RESEND_WEBHOOK_SECRET:'whsec_simulado'};
+  assert.equal((await invoke(env,'/api/maintenance/correo/prueba','POST',{})).status,403);
+  const headers={'X-UCG-Mantenimiento':env.MAINTENANCE_TOKEN};
+  const originalFetch=globalThis.fetch;
+  t.after(()=>{globalThis.fetch=originalFetch});
+  let requestBody;
+  globalThis.fetch=async(url,options)=>{
+    if(options?.method==='POST'){
+      requestBody=JSON.parse(options.body);assert.deepEqual(requestBody.to,['posgrados+prueba@example.org']);
+      return Response.json({id:crypto.randomUUID()});
+    }
+    return Response.json({id:url.split('/').at(-1),text:requestBody.text,subject:requestBody.subject});
+  };
+  const check=await invoke(env,'/api/maintenance/correo/prueba','POST',{},headers);assert.equal(check.status,201);
+  const sent=await check.json();assert.equal(sent.probe.accepted,true);assert.equal(sent.probe.read,false);
+  assert.equal((await invoke(env,'/api/maintenance/correo/prueba','POST',{},headers)).status,429);
+  const {recordMailLoopback}=await import('../src/mail-loopback.js');
+  assert.equal(await recordMailLoopback(env,{type:'email.received',data:{to:['ajeno@example.org']}}),false);
+  const data={to:requestBody.to,subject:requestBody.subject,from:requestBody.from,email_id:crypto.randomUUID()};
+  assert.equal(await recordMailLoopback(env,{type:'email.received',data}),true);
+  assert.equal(await recordMailLoopback(env,{type:'email.received',data}),true);
+  const state=await (await invoke(env,'/api/maintenance/correo/prueba','GET',undefined,headers)).json();
+  assert.equal(state.probe.state,'verificada');assert.ok(state.probe.receivedAt);
+  assert.equal(env.DB.prepare('SELECT COUNT(*) n FROM leads').first().n,0);
+});

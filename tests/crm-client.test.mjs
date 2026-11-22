@@ -14,7 +14,7 @@ function harness(fetcher = async () => { throw Error('unexpected request') }) {
   const document = {querySelector:node,querySelectorAll:()=>[],addEventListener:(name,fn)=>{listeners[name]=fn},activeElement:null}
   class FormDataMock {constructor(form){this.values=form.values||{}} get(key){return this.values[key]??null} has(key){return Object.hasOwn(this.values,key)}}
   const context = vm.createContext({document,window:{addEventListener(){},scrollTo(){}},location:{hash:'',search:'',origin:'https://ucg.test'},URLSearchParams,URL,Intl,Date,Number,String,Object,Array,Set,Math,JSON,Boolean,Error,Promise,FormData:FormDataMock,fetch:fetcher,crypto:{randomUUID:()=> 'new-id'},setTimeout:()=>0,clearTimeout(){},navigator:{}})
-  const script = source.replace("if($('.app').dataset.initialMode==='demo'||new URLSearchParams(location.search).get('demo')==='1')enableDemo()\nelse load()", "render=()=>{}; showPanel=(title,body)=>{document.querySelector('#panel').open=true; document.querySelector('#panel-content').innerHTML=title+body}; globalThis.hooks={state,openLead,leadChanges,changeAppointment,campaignChange,enableDemo,loadQueue,caseSection,campaignLink,campaignInfo};")
+  const script = source.replace("if(publicDemo||$('.app').dataset.initialMode==='demo'||new URLSearchParams(location.search).get('demo')==='1')enableDemo()\nelse load()", "render=()=>{}; showPanel=(title,body)=>{document.querySelector('#panel').open=true; document.querySelector('#panel-content').innerHTML=title+body}; globalThis.hooks={state,openLead,leadChanges,changeAppointment,campaignChange,enableDemo,loadQueue,caseSection,campaignLink,campaignInfo,growth,changeArticle,showConversationResult,inbox,conversationPanel};")
   vm.runInContext(script, context)
   return {hooks:context.hooks,listeners,node}
 }
@@ -99,4 +99,69 @@ test('campaign links are absolute and confined to same-origin program pages', ()
   assert.match(html,/Base del programa: 7/)
   assert.match(html,/Ventana:/)
   assert.match(html,/copy-campaign/)
+})
+
+test('demo conversation invokes only the stateless demo endpoint and displays the extraction', async () => {
+  const requests=[]
+  const h=harness(async(path,opts)=>{requests.push({path,opts});return response({facts:{intent:'Solicitar información',obstacle:'Financiamiento',evidence:[{field:'obstáculo',quote:'necesito financiamiento'}]},plan:{title:'Revisar financiación',reason:'Consulta específica',action:'Revisar opciones',channel:'email',draft:{subject:'Información',text:'Ejemplo'}}})})
+  h.hooks.enableDemo()
+  const button={disabled:false},error={textContent:''}
+  const form={classList:{contains:()=>false},id:'conversation-form',values:{channel:'email',text:'necesito financiamiento'},querySelector:s=>s==='[type=submit]'?button:error}
+  await h.listeners.submit({target:form,preventDefault(){}})
+  assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/demo/conversacion')
+  assert.deepEqual(JSON.parse(requests[0].opts.body),{channel:'email',text:'necesito financiamiento'})
+  assert.match(h.node('#conversation-result').innerHTML,/Financiamiento/)
+  assert.match(h.node('#conversation-result').innerHTML,/no enviado/)
+})
+
+test('content demo creates and publishes preview only in memory', async () => {
+  const h=harness();h.hooks.enableDemo()
+  await h.hooks.growth('draft','op-ej')
+  assert.equal(h.hooks.state.data.articles.length,1)
+  await h.hooks.changeArticle('ar-ej','publish',{title:'Guía revisada'})
+  assert.equal(h.hooks.state.data.articles[0].title,'Guía revisada')
+  assert.equal(h.hooks.state.data.articles[0].status,'published')
+})
+
+test('the initial email example identifies the MBA and localizes evidence and follow-up', async () => {
+  const {demoConversation}=await import('../src/conversation-demo.js')
+  const {programs}=await import('../src/catalog.js')
+  const requests=[]
+  const h=harness(async(path,opts)=>{
+    requests.push(path)
+    return demoConversation(new Request('https://ucg.test'+path,{method:'POST',headers:{'content-type':'application/json'},body:opts.body}),programs)
+  })
+  h.hooks.enableDemo()
+  const page=h.hooks.inbox()
+  const text=page.match(/<textarea[^>]*>([^<]*)<\/textarea>/)[1]
+  assert.match(text,/^Me interesa el MBA\./)
+  assert.match(page,/permiso ficticio ya registrado/)
+  assert.match(page,/Consultar la inversión/)
+  const button={disabled:false},error={textContent:''}
+  const form={classList:{contains:()=>false},id:'conversation-form',values:{channel:'email',text},querySelector:s=>s==='[type=submit]'?button:error}
+  await h.listeners.submit({target:form,preventDefault(){}})
+  assert.deepEqual(requests,['/api/demo/conversacion'])
+  const html=h.node('#conversation-result').innerHTML
+  assert.match(html,/Maestría en Administración de Empresas/)
+  assert.match(html,/Programa de interés/)
+  assert.match(html,/Intención de la consulta/)
+  assert.match(html,/Consultar la inversión/)
+  assert.match(html,/Presupuesto o financiamiento/)
+  assert.match(html,/Preparar respuesta sobre inversión/)
+  assert.match(html,/Borrador ilustrativo/)
+  assert.doesNotMatch(html,/>[^<]*\b(intent|program|obstacle|contactPreference|revision_humana)\b[^<]*</)
+})
+
+test('the staff conversation panel uses Spanish labels for provider metadata', () => {
+  const h=harness()
+  h.hooks.state.mode='live'
+  h.hooks.conversationPanel({provider:'resend',reviewStatus:'linked',contentStatus:'partial',extraction:{
+    intent:'inversion',obstacle:'financing',contactPreference:'email',evidence:[{field:'obstacle',quote:'Me preocupa el costo.'}]
+  }})
+  const html=h.node('#panel-content').innerHTML
+  assert.match(html,/Correo/)
+  assert.match(html,/Con expediente/)
+  assert.match(html,/Contenido pendiente de verificación/)
+  assert.match(html,/Me preocupa el costo.*Obstáculo/)
+  assert.doesNotMatch(html,/>[^<]*\b(resend|linked|partial|financing|obstacle)\b[^<]*</)
 })

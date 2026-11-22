@@ -1,6 +1,9 @@
 import {captureInboundReply,recruitmentReplyTo} from './replies.js';
 import {admissionProof, channelWebhook, contactEvent as event, explicitOptOut, jobTable, stopVoice, submitRetell, submitWhatsapp} from './channels.js';
-import {activeAI, aiText, all, channelPhone, clean, configRows, digest, eligibleQuery, enabled, getSearchConsole, getSemrush, gscReady,
+import {conversationIntakeReady, ingestConversation} from './conversation-intake.js';
+import {reconcileNurtureEmail} from './conversation-nurture.js';
+import {recordMailLoopback} from './mail-loopback.js';
+import {activeAI, aiText, all, channelPhone, clean, configRows, digest, e164, eligibleQuery, enabled, getSearchConsole, getSemrush, gscReady,
   incrementLimit, inHours, mailReady, matches, normalized, now, programFact, publicOrigin, redact,
   requestRemote, retellReady, select, selectedVoice, semrushReady, ServiceError, verifyMac, voiceReady, whatsappKinds, whatsappReady} from './providers.js';
 
@@ -31,7 +34,7 @@ export async function integrationDashboard(env){
 async function payload(req,max=25000){
   if(Number(req.headers.get('content-length'))>max)throw new ServiceError('El contenido supera el límite permitido.',413);
   const reader=req.body?.getReader();if(!reader)throw new ServiceError('Falta el contenido de la solicitud.',400);
-  const decoder=new TextDecoder();let total=0,raw='';
+  const decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});let total=0,raw='';
   for(;;){const {value,done}=await reader.read();if(done)break;total+=value.byteLength;if(total>max){await reader.cancel();throw new ServiceError('El contenido supera el límite permitido.',413);}raw+=decoder.decode(value,{stream:true});}
   return raw+decoder.decode();
 }
@@ -170,23 +173,33 @@ function canDispatch(l,channel,kind){
 }
 async function emailCopy(env,job,lead,program){
   const base=publicOrigin(env),prefs=base+'/preferencias/'+lead.pref_token;
-  const first=clean(lead.name,100).split(' ')[0],title=program?.title;
+  const first=clean(lead.name,100).split(' ')[0],title=program?.title,live=env.INSTITUTIONAL_LIVE==='true';
   const visit=program?base+'/programas/'+program.slug:base+'/programas';
-  const formal='Este seguimiento corresponde a tu solicitud de información. Puedes cambiar tus preferencias en '+prefs+'.';
-  const closing='Equipo de Admisiones de Posgrados\nUniversidad Casa Grande';
+  const formal='Puedes dejar de recibir correos o cambiar tus preferencias desde tu enlace de baja.\n'+prefs;
+  const closing=live?'Equipo de Admisiones de Posgrados\nUniversidad Casa Grande':'Equipo de orientación · Portal piloto de posgrados';
   const guidance=job.kind==='guidance',application=job.kind==='application',admission=job.kind==='admission';
-  let subject=guidance?'Tu siguiente paso en Posgrados UCG':(title?'Orientación sobre '+title:'Tu orientación de posgrados en Casa Grande');
+  let subject=guidance?'Tu siguiente paso para elegir un posgrado':(title?'Orientación sobre '+title:'Tu orientación de posgrados');
   let introduction=guidance?'¿Qué te falta por resolver'+(title?' sobre '+title:' para elegir un posgrado')+'?':'Recibimos tu solicitud de orientación'+(title?' sobre '+title:' sobre los posgrados')+'.';
-  if(application){subject='Tu proceso de postulación';introduction='El equipo de Admisiones registró que tu postulación está en curso.';}
-  if(admission){subject='Próximos pasos de tu matrícula';introduction='El equipo de Admisiones registró tu admisión. Podemos orientarte para completar tu matrícula.';}
+  if(application){subject='Tu proceso de postulación';introduction='El equipo que lleva tu caso registró que tu postulación está en curso.';}
+  if(admission){subject='Próximos pasos de tu matrícula';introduction='El equipo que lleva tu caso registró tu admisión. Podemos orientarte para completar tu matrícula.';}
   let next='';
   if(application)next='Consulta con tu asesor qué documentos requieren verificación y si hay una fecha vigente para completar tu expediente.';
   else if(admission)next='Confirma los pasos administrativos, el costo vigente y las condiciones de pago con tu asesor antes de realizar un pago.';
-  else if(/financi|inversi|calcul|simul/i.test(lead.source))next='Para preparar tu presupuesto, compara la entrada y el número de cuotas en el simulador: '+base+'/financiamiento'+'. Confirma las condiciones vigentes con Admisiones.';
+  else if(/financi|inversi|calcul|simul/i.test(lead.source))next='Para preparar tu presupuesto, revisa la entrada y el número de cuotas en el simulador.\n'+base+'/financiamiento'+(program?'?programa='+encodeURIComponent(program.slug):'');
   else if(lead.stage==='En postulación'||lead.stage==='Admitido')next='Un asesor puede revisar contigo qué documentos requieren atención y el siguiente paso de tu proceso.';
-  else if(/orient|quiz/i.test(lead.source))next='Compara lo que te interesa aprender con la modalidad y el enfoque de la ficha. Si quieres conversar sobre otra opción, Admisiones puede ayudarte a contrastarlas.';
-  else next='Antes de elegir, revisa qué aprenderás, cómo encaja la modalidad con tu semana y qué requisitos debes confirmar con Admisiones.';
-  const lines=['Hola, '+first+':',introduction,next,'Consulta '+(title?'la ficha del programa':'el catálogo')+': '+visit,'Admisiones atiende en el (+593 4) 372 6250.',closing,formal];
+  else if(/orient|quiz/i.test(lead.source))next='Compara lo que te interesa aprender con la modalidad y el enfoque de la ficha. El equipo de orientación puede ayudarte a contrastar otras opciones.';
+  else next='Antes de elegir, revisa qué aprenderás, cómo encaja la modalidad con tu semana y qué requisitos necesitas consultar.';
+  const lines=[first?'Hola, '+first+'.':'Hola.',introduction];
+  if(job.kind==='welcome'){
+    const {leadConfirmationUrl}=await import('./lead-confirmation.js');
+    const created=await select(env.DB,'SELECT created_at FROM jobs WHERE id=? AND lead_id=?',job.id,lead.id).first();
+    const confirm=await leadConfirmationUrl(base,lead,created?.created_at || lead.created_at);
+    if(confirm)lines.push('Confirma o corrige la maestría que te interesa y cuándo te gustaría empezar desde este enlace privado.\n'+confirm);
+    else lines.push('Si cambió la maestría que te interesa o cuándo te gustaría empezar, cuéntaselo al equipo de orientación cuando solicites una cita.');
+  }
+  const agenda=base+'/cita'+(program?'?programa='+encodeURIComponent(program.slug):'');
+  lines.push(next,'Puedes consultar '+(title?'la ficha del programa':'el catálogo')+' aquí.\n'+visit,
+    'Si te gustaría conversar, puedes solicitar una cita aquí.\n'+agenda,closing,formal);
   const replyTo=await recruitmentReplyTo(env,lead)||env.RESEND_REPLY_TO;
   return {from:env.RESEND_FROM,to:[lead.email],tags:[{name:'flujo',value:'posgrados-ucg'},{name:'seguimiento',value:job.id}],subject,text:lines.join('\n\n'),...(replyTo?{reply_to:replyTo}:{}),headers:{'List-Unsubscribe':'<'+base+'/api/preferences/'+lead.pref_token+'>','List-Unsubscribe-Post':'List-Unsubscribe=One-Click'}};
 }
@@ -295,7 +308,12 @@ async function handleResend(req,env){
   const valid=await Promise.all(sigs.map(v=>verifyMac(key,'SHA-256',id+'.'+ts+'.'+raw,v)));
   if(!valid.some(Boolean))return json({error:'Firma no válida.'},403);
   let data;try{data=JSON.parse(raw);}catch{return json({error:'Evento no válido.'},400);}
-  if(data.type==='email.received')return json(await captureInboundReply(env,data));
+  if(!data || typeof data!=='object')return json({error:'Evento no válido.'},400);
+  if(data.type==='email.received'){
+    if(await recordMailLoopback(env,data))return json({received:true});
+    return json(await captureInboundReply(env,data));
+  }
+  if(await reconcileNurtureEmail(env,data,id))return json({received:true});
   const states={'email.delivered':'El proveedor confirmó la entrega del correo.','email.bounced':'El correo rebotó. Se suspendió el canal de correo.','email.complained':'Se recibió una queja. Se suspendió el canal de correo.','email.failed':'El proveedor informó un fallo de entrega.','email.suppressed':'El proveedor suprimió el envío. Se suspendió el canal de correo.'};
   if(!states[data.type] || !data.data?.email_id)return json({received:true});
   let job=await select(env.DB,"SELECT id,lead_id FROM jobs WHERE channel='email' AND provider_id=?",data.data.email_id).first();
@@ -314,13 +332,61 @@ async function handleResend(req,env){
   await env.DB.batch(changes);
   return json({received:true});
 }
-async function handleTwilio(req,env,programs,url,type,id){
-  if(!env.TWILIO_AUTH_TOKEN || !env.DB || !publicOrigin(env))return json({error:'Webhook sin configurar.'},503);
+async function twilioParams(req,env,url){
+  if(!env.TWILIO_AUTH_TOKEN || !env.TWILIO_ACCOUNT_SID || !env.DB || !publicOrigin(env))
+    throw new ServiceError('Webhook de Twilio sin configurar.',503);
   const params=new URLSearchParams(await payload(req,16000)),uri=publicOrigin(env)+url.pathname+url.search;
   const values=[...new Set(params.keys())].sort().flatMap(k=>[...new Set(params.getAll(k))].sort().map(v=>k+v)).join('');
-  if(!await verifyMac(encoder.encode(env.TWILIO_AUTH_TOKEN),'SHA-1',uri+values,req.headers.get('X-Twilio-Signature')))return json({error:'Firma no válida.'},403);
+  if(!await verifyMac(encoder.encode(env.TWILIO_AUTH_TOKEN),'SHA-1',uri+values,req.headers.get('X-Twilio-Signature')) || params.get('AccountSid')!==env.TWILIO_ACCOUNT_SID)
+    throw new ServiceError('Firma o cuenta de Twilio no válida.',403);
+  return {params,uri};
+}
+
+const inboundTwilio='/api/webhooks/twilio/inbound';
+const callSidPattern=/^CA[a-f0-9]{32}$/i;
+const callStatuses={completed:'Finalizó la llamada recibida.',busy:'La llamada recibida encontró la línea ocupada.',
+  failed:'La llamada recibida falló.','no-answer':'La llamada recibida no tuvo respuesta.',canceled:'Se canceló la llamada recibida.'};
+
+async function handleTwilioInbound(req,env,url){
+  const receiver=env.TWILIO_INBOUND_NUMBER;
+  if(!e164(receiver))return json({error:'Número entrante de Twilio sin configurar.'},503);
+  if(!/^application\/x-www-form-urlencoded(?:\s*;|$)/i.test(req.headers.get('content-type')||''))
+    return json({error:'Contenido de Twilio no válido.'},415);
+  const {params}=await twilioParams(req,env,url);
+  const callId=params.get('CallSid'),to=params.get('To'),from=params.get('From');
+  const singular=['AccountSid','CallSid','To','From','Direction','SpeechResult','Digits','CallStatus'];
+  if(!callSidPattern.test(callId||'') || receiver!==to || from===to || !from || params.get('Direction')!=='inbound' ||
+    singular.some(key=>params.getAll(key).length>1))
+    return json({error:'Llamada entrante no autorizada.'},403);
+  const fallback='Puedes solicitar orientación en el sitio de Posgrados o llamar a Admisiones al cero cuatro, tres siete dos, seis dos cinco cero.';
+  if(url.pathname===inboundTwilio)
+    return twiml(gather(publicOrigin(env)+inboundTwilio+'/speech',
+      'Hola, te atiende el asistente automatizado de Posgrados de la Universidad Casa Grande. Cuéntanos brevemente qué necesitas. Evita dictar información confidencial. Para dejar de recibir llamadas, marca nueve o di darme de baja.',6)+say(fallback));
+  const ready=await conversationIntakeReady(env.DB);
+  if(url.pathname===inboundTwilio+'/status'){
+    const state=params.get('CallStatus');
+    if(ready && Object.hasOwn(callStatuses,state)){
+      const key=await digest(callId);
+      const record=await select(env.DB,"SELECT lead_id FROM admissions_conversations WHERE provider='twilio' AND event_id=? AND direction='inbound'",key).first();
+      if(record?.lead_id)await event(env.DB,'voz-recepcion:'+key+':'+state,record.lead_id,'llamada',callStatuses[state],now(),'Twilio').run();
+    }
+    return json({received:true});
+  }
+  const speech=clean(params.get('SpeechResult'),2500);
+  const phone=e164(from)?from:undefined;
+  if(params.get('Digits')==='9' || explicitOptOut(speech)){
+    if(phone)await stopVoice(env.DB,phone,now(),'Baja solicitada durante una llamada.');
+    return twiml(say(phone?'Registramos la baja para el número de esta llamada.':'Para registrar la baja, usa el enlace de preferencias que recibiste o comunícate con Admisiones.'));
+  }
+  if(!ready || speech.length<3)return twiml(say(fallback));
+  const result=await ingestConversation(env,{provider:'twilio',eventId:callId,phone,direction:'inbound',kind:'call',text:speech,allowCreate:!!phone});
+  return twiml(say(result?.id?'Recibimos tu consulta para revisión del equipo de Admisiones. Gracias por comunicarte con nosotros.':fallback));
+}
+
+async function handleTwilio(req,env,programs,url,type,id){
+  const {params,uri}=await twilioParams(req,env,url);
   const job=await select(env.DB,"SELECT j.lead_id,j.provider_id,l.* FROM jobs j JOIN leads l ON j.lead_id=l.id WHERE j.id=? AND j.channel='voice'",id).first();
-  if(!job || params.get('AccountSid')!==env.TWILIO_ACCOUNT_SID || !job.provider_id || job.provider_id!==params.get('CallSid'))return json({error:'Llamada no conciliada.'},409);
+  if(!job || !job.provider_id || job.provider_id!==params.get('CallSid'))return json({error:'Llamada no conciliada.'},409);
   const lead_id=job.lead_id;
   const dt=now();
   if(type==='status'){
@@ -332,7 +398,8 @@ async function handleTwilio(req,env,programs,url,type,id){
     }
     return json({received:true});
   }
-  const speech=normalized(clean(params.get('SpeechResult'),480));
+  const words=clean(params.get('SpeechResult'),2500);
+  const speech=normalized(words.slice(0,480));
   let digit=params.get('Digits');
   if(!digit && speech && !/\bno\b/.test(speech) && /^(?:asesor[a]?|uno)[.! ]*$|quiero (?:que |hablar con |contactar (?:a |con )?)(?:un[a]? )?asesor/.test(speech))digit='1';
   if(digit==='9' || explicitOptOut(speech)){
@@ -344,8 +411,14 @@ async function handleTwilio(req,env,programs,url,type,id){
   if(digit==='1'){
     const eid='voz:'+id+':asesor';
     await env.DB.batch([select(env.DB,"INSERT OR IGNORE INTO tasks(id,lead_id,title,status,due_at,created_at) VALUES(?,?,?,'pendiente',?,?)",eid,lead_id,'Llamar al aspirante que solicitó hablar con un asesor',dt,dt),event(env.DB,eid,lead_id,'solicitud','Solicitó conversar con un asesor durante la llamada.',dt,'Aspirante')]);
-    return twiml(say('El equipo de Admisiones recibió tu solicitud de contacto. Gracias.'));
   }
+  const destination=channelPhone(params.get('To'));
+  if(words.length>=3 && destination && destination===channelPhone(job.phone) && await conversationIntakeReady(env.DB)){
+    const stamp=await digest(speech);
+    await ingestConversation(env,{provider:'twilio',eventId:job.provider_id+':'+stamp.slice(0,32),leadId:lead_id,phone:destination,
+      direction:'outbound',kind:'call',text:'User: '+words.replace(/\s+/g,' '),allowCreate:false});
+  }
+  if(digit==='1')return twiml(say('El equipo de Admisiones recibió tu solicitud de contacto. Gracias.'));
   const p=programs.find(item=>item.slug===job.program);
   if(digit==='2' && p){
     const detail=[p.title,p.mode,p.duration].filter(Boolean).join('. ');
@@ -370,6 +443,8 @@ export async function handleIntegrations(request,env,url,programs,operator){
     if(p==='/api/webhooks/resend' && method==='POST')return await handleResend(request,env);
     const channel=channelWebhook(request,env,url);
     if(channel)return await channel;
+    if([inboundTwilio,inboundTwilio+'/speech',inboundTwilio+'/status'].includes(p))
+      return method==='POST'?await handleTwilioInbound(request,env,url):json({error:'Utiliza POST para recibir llamadas.'},405);
     const twilio=p.match(/^\/api\/webhooks\/twilio\/(status|menu)\/([A-Za-z0-9_-]{1,100})$/);
     if(twilio && method==='POST')return await handleTwilio(request,env,programs,url,twilio[1],twilio[2]);
     const article=p.match(/^\/api\/staff\/articles\/([\w-]+)$/);
