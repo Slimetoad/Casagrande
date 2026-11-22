@@ -316,3 +316,20 @@ test('guías publicadas muestran encabezados, fuente UCG y CTA seguros con esque
     assert.doesNotMatch(bad,/Ficha institucional del programa/);assert.ok(!bad.includes(sourceUrl));
   }
 });
+
+test("las fotos móviles de portada y fichas existen en cada resolución anunciada", async () => {
+  const paths = ["/", ...programs.map(program => "/programas/" + program.slug)];
+  const assets = new Set();
+  for (const path of paths) {
+    const html = renderStudent(path, programs);
+    const sources = [...html.matchAll(/<source media="\(max-width: 620px\)" srcset="([^"]+)"/g)];
+    assert.ok(sources.length > 0, path);
+    for (const [, candidates] of sources) {
+      for (const candidate of candidates.split(", ")) assets.add(candidate.split(" ")[0]);
+    }
+  }
+  for (const path of assets) {
+    const photo = await readFile(new URL("../public" + path, import.meta.url));
+    assert.equal(photo.toString("ascii", 8, 12), "WEBP", path);
+  }
+});

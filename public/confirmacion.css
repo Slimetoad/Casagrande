@@ -19,3 +19,9 @@
 .confirm-wrap form .btn {justify-self:start;margin-top:.25rem}
 .confirm-wrap>.btn {margin-top:1.4rem}
 .confirm-wrap .confirm-notice {padding:.7rem .8rem;margin-top:1rem;border-left:3px solid #a55d25;background:#fff2df}
+@media(max-width:620px){
+  .confirm-wrap{width:calc(100% - 1.5rem);margin:1rem auto;padding:1.25rem}
+  .confirm-wrap h1{font-size:clamp(2.2rem,10vw,3.5rem);overflow-wrap:anywhere}
+  .confirm-wrap form select,.confirm-wrap form input:not([type=checkbox]):not([type=radio]){font-size:16px;min-height:48px}
+  .confirm-wrap form .btn,.confirm-wrap>.btn{width:100%;min-height:48px;justify-content:center}
+}

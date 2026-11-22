@@ -108,7 +108,15 @@ function localLeads(){
 function leadTable(rows){
   if(!rows.length)return empty('Sin coincidencias.','Prueba otra búsqueda o cambia los filtros. Los nuevos registros llegan desde el portal del aspirante.')
   if(state.layout==='etapas')return '<div class="stages">'+stageNames.filter(s=>!state.stage||s===state.stage).map(s=>'<div class="stage-col"><h3>'+esc(s)+'</h3>'+(rows.filter(l=>l.stage===s).map(l=>'<button class="stage-btn" data-act="lead" '+item(l.id)+'><b>'+esc(l.name)+'</b><small>'+esc(program(l.program))+'</small><span class="stage-next">'+esc(l.nextAction||'Definir siguiente paso')+'</span><small>'+esc(l.dueAt?date(l.dueAt,true)+' · Guayaquil':'Sin fecha')+' · '+esc(l.owner||'Sin responsable')+'</small>'+(l.dueAt&&iso(l.dueAt)<new Date()?badge('Vencida','danger'):'')+'</button>').join('')||'<span class="fine">Sin registros</span>')+'</div>').join('')+'</div>'
-  return '<div class="table-wrap"><table><thead><tr><th>Aspirante</th><th>Etapa</th><th>Programa</th><th>Responsable</th><th>Siguiente acción</th></tr></thead><tbody>'+rows.map(l=>'<tr><td><button class="list-name" data-act="lead" '+item(l.id)+'>'+esc(l.name)+'</button><small>'+esc(l.email||l.phone||'')+'</small></td><td>'+stageBadge(l.stage)+'</td><td>'+esc(program(l.program))+'</td><td>'+esc(l.owner||'Sin asignar')+'</td><td>'+esc(l.nextAction||'Por definir')+(l.dueAt?'<small>'+esc(date(l.dueAt))+'</small>':'')+'</td></tr>').join('')+'</tbody></table></div>'
+  const cells = rows.map(lead => `<tr role="row">
+    <td role="cell" class="lead-person"><button class="list-name" data-act="lead" ${item(lead.id)}>${esc(lead.name)}</button><small>${esc(lead.email || lead.phone || '')}</small></td>
+    <td role="cell" class="lead-stage">${stageBadge(lead.stage)}</td>
+    <td role="cell"><span class="mobile-cell-label" aria-hidden="true">Programa</span>${esc(program(lead.program))}</td>
+    <td role="cell"><span class="mobile-cell-label" aria-hidden="true">Responsable</span>${esc(lead.owner || 'Sin asignar')}</td>
+    <td role="cell" class="lead-next"><span class="mobile-cell-label" aria-hidden="true">Siguiente acción</span>${esc(lead.nextAction || 'Por definir')}${lead.dueAt ? '<small>'+esc(date(lead.dueAt))+'</small>' : ''}</td>
+  </tr>`).join('')
+  const columns = ['Aspirante','Etapa','Programa','Responsable','Siguiente acción']
+  return `<div class="table-wrap lead-table"><table role="table" aria-label="Cartera de aspirantes"><thead role="rowgroup"><tr role="row">${columns.map(label=>'<th role="columnheader" scope="col">'+label+'</th>').join('')}</tr></thead><tbody role="rowgroup">${cells}</tbody></table></div>`
 }
 function tableArea(){
   const rows=state.leadResults||localLeads()

@@ -27,6 +27,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-administracion-de-empresas",
     "image": "/media/maestria-en-administracion-de-empresas.webp",
+    "mobilePhoto": "/media/compact/maestria-en-administracion-de-empresas",
     "details": [
       "Estrategia empresarial",
       "Innovación y posicionamiento",
@@ -56,6 +57,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-ia-y-ciencia-de-datos",
     "image": "/media/maestria-en-ia-y-ciencia-de-datos.webp",
+    "mobilePhoto": "/media/compact/maestria-en-ia-y-ciencia-de-datos",
     "details": [
       "Análisis exploratorio y visualización",
       "Modelos de aprendizaje automático",
@@ -85,6 +87,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXU",
     "image": "/media/flex-comunicacion-estrategica-e-imagen-institucional.webp",
+    "mobilePhoto": "/media/compact/flex-comunicacion-estrategica-e-imagen-institucional",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -119,6 +122,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-administracion-educativa",
     "image": "/media/maestria-en-administracion-educativa.webp",
+    "mobilePhoto": "/media/compact/maestria-en-administracion-educativa",
     "details": [
       "Gestión de centros educativos",
       "Proyectos de mejora",
@@ -154,6 +158,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-ciberseguridad",
     "image": "/media/maestria-en-ciberseguridad.webp",
+    "mobilePhoto": "/media/compact/maestria-en-ciberseguridad",
     "details": [
       "Gestión de riesgos digitales",
       "Protección de información",
@@ -190,6 +195,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-derecho-digital",
     "image": "/media/maestria-en-derecho-digital.webp",
+    "mobilePhoto": "/media/compact/maestria-en-derecho-digital",
     "details": [
       "Innovación legal",
       "Protección de datos",
@@ -219,6 +225,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-administracion-publica",
     "image": "/media/maestria-en-administracion-publica.webp",
+    "mobilePhoto": "/media/compact/maestria-en-administracion-publica",
     "details": [
       "Derecho público",
       "Gestión pública",
@@ -254,6 +261,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-comunicacion",
     "image": "/media/maestria-en-comunicacion.webp",
+    "mobilePhoto": "/media/compact/maestria-en-comunicacion",
     "details": [
       "Narrativas digitales",
       "Convergencia de medios",
@@ -283,6 +291,7 @@ export const programs = [
     "price": null,
     "url": "https://assets.casagrande.edu.ec/web/study-plans/postgraduate/FOLLETO-EDUCACION-MENCION-INNOVACIONES-PED.pdf",
     "image": "/media/maestria-en-educacion-mencion-innovaciones-pedagogicas.webp",
+    "mobilePhoto": "/media/compact/maestria-en-educacion-mencion-innovaciones-pedagogicas",
     "details": [
       "Tecnología educativa",
       "Teorías del aprendizaje",
@@ -318,6 +327,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-cadena-de-suministro",
     "image": "/media/maestria-en-cadena-de-suministro.webp",
+    "mobilePhoto": "/media/compact/maestria-en-cadena-de-suministro",
     "details": [
       "Diseño de cadenas de suministro",
       "Análisis de datos logísticos",
@@ -352,6 +362,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-marketing-estrategico",
     "image": "/media/maestria-en-marketing-estrategico.webp",
+    "mobilePhoto": "/media/compact/maestria-en-marketing-estrategico",
     "details": [
       "Estrategia de marketing",
       "Análisis de datos de mercado",
@@ -380,6 +391,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-neuropsicologia",
     "image": "/media/maestria-en-neuropsicologia.webp",
+    "mobilePhoto": "/media/compact/maestria-en-neuropsicologia",
     "details": [
       "Neuropsicología del desarrollo",
       "Psicología educativa",
@@ -414,6 +426,7 @@ export const programs = [
     "price": null,
     "url": "https://www.casagrande.edu.ec/posgrado/maestria-en-pedagogia-de-los-idiomas",
     "image": "/media/maestria-en-pedagogia-de-los-idiomas.webp",
+    "mobilePhoto": "/media/compact/maestria-en-pedagogia-de-los-idiomas",
     "details": [
       "Adquisición de una segunda lengua",
       "Enseñanza comunicativa",
@@ -448,6 +461,7 @@ export const programs = [
     "price": 3000,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWV",
     "image": "/media/flex-derecho-administrativo-y-contratacion-publica.webp",
+    "mobilePhoto": "/media/compact/flex-derecho-administrativo-y-contratacion-publica",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -482,6 +496,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXV",
     "image": "/media/flex-administracion-de-empresas-management.webp",
+    "mobilePhoto": "/media/compact/flex-administracion-de-empresas-management",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -516,6 +531,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWP",
     "image": "/media/flex-comunicacion-y-creacion-de-contenidos-con-ia.webp",
+    "mobilePhoto": "/media/compact/flex-comunicacion-y-creacion-de-contenidos-con-ia",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -550,6 +566,7 @@ export const programs = [
     "price": 3000,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVY",
     "image": "/media/flex-contabilidad-y-auditoria.webp",
+    "mobilePhoto": "/media/compact/flex-contabilidad-y-auditoria",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -584,6 +601,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXP",
     "image": "/media/flex-derecho-constitucional.webp",
+    "mobilePhoto": "/media/compact/flex-derecho-constitucional",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -618,6 +636,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXQ",
     "image": "/media/flex-derecho-procesal-penal.webp",
+    "mobilePhoto": "/media/compact/flex-derecho-procesal-penal",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -652,6 +671,7 @@ export const programs = [
     "price": 3000,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVP",
     "image": "/media/flex-derecho-laboral-publico-y-privado.webp",
+    "mobilePhoto": "/media/compact/flex-derecho-laboral-publico-y-privado",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -686,6 +706,7 @@ export const programs = [
     "price": 3000,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXUY",
     "image": "/media/flex-derecho-tributario.webp",
+    "mobilePhoto": "/media/compact/flex-derecho-tributario",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -720,6 +741,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVT",
     "image": "/media/flex-direccion-comercial-y-ventas.webp",
+    "mobilePhoto": "/media/compact/flex-direccion-comercial-y-ventas",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -754,6 +776,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWT",
     "image": "/media/flex-docencia-e-investigacion-en-educacion-superior.webp",
+    "mobilePhoto": "/media/compact/flex-docencia-e-investigacion-en-educacion-superior",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -788,6 +811,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXX",
     "image": "/media/flex-educacion-basica.webp",
+    "mobilePhoto": "/media/compact/flex-educacion-basica",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -822,6 +846,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVX",
     "image": "/media/flex-educacion-inclusiva.webp",
+    "mobilePhoto": "/media/compact/flex-educacion-inclusiva",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -856,6 +881,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXW",
     "image": "/media/flex-educacion-inicial.webp",
+    "mobilePhoto": "/media/compact/flex-educacion-inicial",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -890,6 +916,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVR",
     "image": "/media/flex-gerencia-en-servicios-de-la-salud.webp",
+    "mobilePhoto": "/media/compact/flex-gerencia-en-servicios-de-la-salud",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -924,6 +951,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXS",
     "image": "/media/flex-gestion-del-talento-humano.webp",
+    "mobilePhoto": "/media/compact/flex-gestion-del-talento-humano",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -958,6 +986,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXT",
     "image": "/media/flex-gestion-de-proyectos.webp",
+    "mobilePhoto": "/media/compact/flex-gestion-de-proyectos",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -992,6 +1021,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXVW",
     "image": "/media/flex-gestion-innovacion-y-liderazgo-educativo.webp",
+    "mobilePhoto": "/media/compact/flex-gestion-innovacion-y-liderazgo-educativo",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -1026,6 +1056,7 @@ export const programs = [
     "price": 2800,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWY",
     "image": "/media/flex-pedagogia-de-las-matematicas.webp",
+    "mobilePhoto": "/media/compact/flex-pedagogia-de-las-matematicas",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -1060,6 +1091,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXXR",
     "image": "/media/flex-psicologia-organizacional.webp",
+    "mobilePhoto": "/media/compact/flex-psicologia-organizacional",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -1094,6 +1126,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWW",
     "image": "/media/flex-salud-y-seguridad-ocupacional.webp",
+    "mobilePhoto": "/media/compact/flex-salud-y-seguridad-ocupacional",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",
@@ -1128,6 +1161,7 @@ export const programs = [
     "price": 3200,
     "url": "https://posgrados.casagrande.edu.ec/maestrias?action=vermaestria&id=OPPQQRRSSTTUUVVWWXWX",
     "image": "/media/flex-urbanismo-y-planificacion-territorial.webp",
+    "mobilePhoto": "/media/compact/flex-urbanismo-y-planificacion-territorial",
     "details": [
       "Titulación mediante examen complexivo.",
       "Tutorías en vivo: Sábados o domingos de 08:00 a 13:00.",

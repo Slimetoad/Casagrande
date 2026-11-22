@@ -39,6 +39,12 @@
   const setMenu = open => { const nav=el("site-nav"); if(open)nav.setAttribute("data-open","");else nav.removeAttribute("data-open"); menu.setAttribute("aria-expanded",String(open)); menu.setAttribute("aria-label",open?"Cerrar menú":"Abrir menú"); };
   menu?.addEventListener("click",()=>setMenu(menu.getAttribute("aria-expanded")!=="true"));
   document.addEventListener("keydown",e=>{if(e.key==="Escape" && menu?.getAttribute("aria-expanded")==="true"){setMenu(false);menu.focus();}});
+  document.addEventListener("click", e => {
+    if (menu?.getAttribute("aria-expanded") === "true" && !e.target.closest(".masthead")) setMenu(false);
+  });
+  window.matchMedia?.("(min-width: 796px)")?.addEventListener?.("change", e => {
+    if (e.matches && menu?.getAttribute("aria-expanded") === "true") setMenu(false);
+  });
 
   const areaChoices = [...document.querySelectorAll("[data-home-area]")];
   for (const choice of areaChoices) {
@@ -280,8 +286,8 @@
         const grid=node("div");grid.className="quiz-options";const btn=node("button",step===2?"Ver mis resultados":"Continuar");btn.type="button";btn.className="btn btn-primary";btn.disabled=!answers[q.key];
         q.choices.forEach(text=>{const lab=node("label"),input=node("input");input.type="radio";input.name=q.key;input.value=text;input.checked=answers[q.key]===text;input.addEventListener("change",()=>{answers[q.key]=text;btn.disabled=false;});lab.append(input,node("span",text));grid.append(lab);});
         field.append(grid);mount.append(field);const actions=node("div");actions.className="quiz-actions";actions.append(btn);
-        btn.addEventListener("click",()=>{if(!answers[q.key])return;step++;if(step===questions.length)conversion("quiz_complete");draw();mount.querySelector("h2")?.focus({preventScroll:true});});
-        if(step>0){const back=node("button","Volver");back.type="button";back.className="btn btn-quiet";back.addEventListener("click",()=>{step--;draw();});actions.append(back);}
+        btn.addEventListener("click",()=>{if(!answers[q.key])return;step++;if(step===questions.length)conversion("quiz_complete");draw();mount.querySelector("h2")?.focus();});
+        if(step>0){const back=node("button","Volver");back.type="button";back.className="btn btn-quiet";back.addEventListener("click",()=>{step--;draw();mount.querySelector("h2")?.focus();});actions.append(back);}
         mount.append(actions);title.tabIndex=-1;return;
       }
       const byArea=programs.filter(p=>p.area===answers.quizArea);
@@ -295,7 +301,7 @@
       const grid=node("div");grid.className="quiz-results";
       results.forEach(p=>{const a=node("a");a.href=urlFor(p);a.append(node("span",p.area),node("strong",p.title),node("span",[p.family,p.mode,p.duration,p.admissionsStatus].filter(Boolean).join(" · ")));grid.append(a);});mount.append(grid);
       const cta=choice(mount,"Conversar sobre mis resultados",leadUrl("orientacion",results[0]?.slug));cta.addEventListener("click",()=>save("quiz",{...answers,quizResult:results[0]?.slug||""}));
-      const actions=node("div");actions.className="quiz-actions";const restart=node("button","Repetir el test");restart.className="btn btn-quiet";restart.type="button";restart.addEventListener("click",()=>{step=0;for(const k of Object.keys(answers))delete answers[k];draw();});actions.append(restart);mount.append(actions);
+      const actions=node("div");actions.className="quiz-actions";const restart=node("button","Repetir el test");restart.className="btn btn-quiet";restart.type="button";restart.addEventListener("click",()=>{step=0;for(const k of Object.keys(answers))delete answers[k];draw();mount.querySelector("h2")?.focus();});actions.append(restart);mount.append(actions);
     };draw();
   }
 
@@ -371,7 +377,30 @@
 
   const launch=el("chat-launch"),panel=el("chat-panel"),chat=el("chat-form"),log=el("chat-log"),msg=el("chat-msg");
   let chatUsed=false,sending=false,chatProgram="",previousQuestion="";
-  const toggleChat=open=>{panel.hidden=!open;launch.hidden=open;launch.setAttribute("aria-expanded",String(open));if(open){msg.focus();if(!chatUsed){conversion("chat_open");chatUsed=true;}}else launch.focus();};
+  const viewport = window.visualViewport;
+  const fitChatToViewport = () => {
+    if (!viewport || !panel || panel.hidden) return;
+    const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+    panel.style.setProperty("--chat-keyboard-inset", keyboardInset + "px");
+    panel.style.setProperty("--chat-visible-height", viewport.height + "px");
+    panel.toggleAttribute("data-short", viewport.height < 420);
+  };
+  const toggleChat = open => {
+    panel.hidden = !open;
+    launch.hidden = open;
+    launch.setAttribute("aria-expanded", String(open));
+    if (open) {
+      fitChatToViewport();
+      viewport?.addEventListener("resize", fitChatToViewport);
+      viewport?.addEventListener("scroll", fitChatToViewport);
+      msg.focus();
+      if (!chatUsed) { conversion("chat_open"); chatUsed = true; }
+    } else {
+      viewport?.removeEventListener("resize", fitChatToViewport);
+      viewport?.removeEventListener("scroll", fitChatToViewport);
+      launch.focus();
+    }
+  };
   launch?.addEventListener("click",()=>toggleChat(true));el("chat-close")?.addEventListener("click",()=>toggleChat(false));
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&panel&&!panel.hidden)toggleChat(false);});
   const say=(text,mine)=>{const p=node("p",text);p.className=mine?"chat-question":"chat-answer";log.append(p);log.scrollTop=log.scrollHeight;return p;};
