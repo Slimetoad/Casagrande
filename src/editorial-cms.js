@@ -32,7 +32,7 @@ async function readReceipt(response) {
 async function sendCms(config,job) {
   try {
     const response=await fetch(config.endpoint,{
-      method:'POST',redirect:'error',signal:AbortSignal.timeout(10000),
+      method:'POST',redirect:'manual',signal:AbortSignal.timeout(10000),
       headers:{authorization:'Bearer '+config.token,'content-type':'application/json',accept:'application/json','idempotency-key':job.id},
       body:job.payload
     });

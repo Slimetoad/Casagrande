@@ -86,7 +86,7 @@ export async function checkEditorialSource(env,url) {
   if (!institutionalUrl(url)) return false;
   if (env.SEO_EDITORIAL_LIVE_SOURCE_CHECK!=='true') return true;
   try {
-    const request = {redirect:'error',signal:AbortSignal.timeout(6500)};
+    const request = {redirect:'manual',signal:AbortSignal.timeout(6500)};
     let result = await fetch(url,{...request,method:'HEAD'});
     if (result.status===405 || result.status===501) {
       result = await fetch(url,{...request,method:'GET'});

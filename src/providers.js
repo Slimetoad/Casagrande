@@ -10,7 +10,7 @@ export class ServiceError extends Error {
 }
 export async function requestRemote(url, options, label) {
   let response;
-  try { response = await fetch(url,{...options,signal:AbortSignal.timeout(16000)}); }
+  try { response = await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(16000)}); }
   catch { throw new ServiceError(label+' no confirmó la solicitud. Comprueba el estado del proveedor.'); }
   if (!response.ok) throw new ServiceError(label+' devolvió el código '+response.status+'. Revisa la configuración del servicio.',503,response.status);
   return response;

@@ -147,7 +147,7 @@ function transport(connection) {
     if(session)headers['Mcp-Session-Id']=session;
     let response;
     try {
-      response=await fetch(connection.url,{method:'POST',headers,body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(9000)});
+      response=await fetch(connection.url,{method:'POST',headers,body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(9000)});
     }catch {throw new OpenSeoError('error','OpenSEO no respondió dentro de la ventana de conexión.');}
     if(!response.ok) {
       await response.body?.cancel().catch(()=>{});
@@ -208,7 +208,7 @@ function transport(connection) {
     if(!session||!version)return;
     try {
       const response=await fetch(connection.url,{method:'DELETE',headers:{...connection.headers,'Mcp-Session-Id':session,'MCP-Protocol-Version':version},
-        redirect:'error',signal:AbortSignal.timeout(1500)});
+        redirect:'manual',signal:AbortSignal.timeout(1500)});
       await response.body?.cancel();
     }catch{/* Expired sessions are also retired by the provider. */}
   }

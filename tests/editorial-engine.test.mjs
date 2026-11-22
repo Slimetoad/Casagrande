@@ -166,7 +166,7 @@ test('el CMS recibe la versión publicada y conserva una sola clave incluso al r
   const keys=[];
   t.mock.method(globalThis,'fetch',async(url,options)=>{
     assert.equal(url,campus+'/api/guias/v1');
-    assert.equal(options.redirect,'error');
+    assert.equal(options.redirect,'manual');
     assert.equal(options.headers.authorization,'Bearer token-local');
     const key=options.headers['idempotency-key'],payload=JSON.parse(options.body);
     keys.push(key);

@@ -58,7 +58,7 @@ function autoMessage(subject,headers = {}) {
 }
 async function incomingBody(apiKey,id) {
   const response = await fetch('https://api.resend.com/emails/receiving/'+id+'?html_format=cid',{
-    headers:{authorization:'Bearer '+apiKey,accept:'application/json'},signal:AbortSignal.timeout(6500),redirect:'error'
+    headers:{authorization:'Bearer '+apiKey,accept:'application/json'},signal:AbortSignal.timeout(6500),redirect:'manual'
   });
   if (!response.ok) {
     if (response.status===429 || response.status===404 || response.status>=500) throw new Error('Recepción de correo temporalmente no disponible');

@@ -58,7 +58,7 @@ function setupMock(t,{badTracker=false,market=project,omit=null,pageRows=null,pr
   let study=0;
   t.mock.method(globalThis,'fetch',async(address,options)=>{
     assert.equal(address,'https://app.openseo.so/mcp');
-    assert.equal(options.redirect,'error');
+    assert.equal(options.redirect,'manual');
     assert.equal(options.headers.Authorization,'Bearer prueba-local');
     if(options.method==='DELETE') {
       calls.push('DELETE');
@@ -187,7 +187,7 @@ test('los errores de autorización conservan un mensaje seguro y no siguen redir
   const {env,DB}=fixture({OPENSEO_AUTH_HEADER:'x-api-key'});
   t.mock.method(globalThis,'fetch',async(url,options)=>{
     assert.equal(url,'https://app.openseo.so/mcp');
-    assert.equal(options.redirect,'error');
+    assert.equal(options.redirect,'manual');
     assert.equal(options.headers['x-api-key'],'prueba-local');
     assert.equal(options.headers.Authorization,undefined);
     return Response.json({secret:'No exponer la clave prueba-local'},{status:401});
