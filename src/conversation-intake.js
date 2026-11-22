@@ -3,6 +3,7 @@ import { extractConversationFacts, redactConversationLine } from './conversation
 import { channelPhone, digest, inHours } from './providers.js';
 import { programs as catalog } from './catalog.js';
 import { tableExists } from './workspace.js';
+import { reasonConversation } from './conversation-model.js';
 
 export { extractConversationFacts };
 const stmt = (db,sql,...args) => args.length ? db.prepare(sql).bind(...args) : db.prepare(sql);
@@ -192,7 +193,23 @@ export async function ingestConversation(env,input) {
   };
   const eventId = await digest(input.eventId);
   const analysis = extractConversationFacts(input,catalog);
-  const {row,duplicate} = await storeConversation(env,input,contact,analysis,eventId);
+  let {row,duplicate} = await storeConversation(env,input,contact,analysis,eventId);
+  // Claim a single optional annotation only after persistence. Retries and concurrent
+  // deliveries never make another model request, including after a timeout.
+  if (!duplicate && row.direction==='inbound' && row.content_status==='complete' && row.review_status==='linked' &&
+      env.ANTHROPIC_API_KEY && env.ANTHROPIC_MODEL==='claude-haiku-5-5') {
+    const original=row.extraction, facts=extracted(original);
+    if (['programa','inversion','cita','requisitos','solicitar_asesor'].includes(facts.intent)) {
+      const claimed=JSON.stringify({...facts,modelAnalysis:{status:'processing'}});
+      const claim=await stmt(env.DB,'UPDATE admissions_conversations SET extraction=? WHERE id=? AND extraction=?',claimed,row.id,original).run();
+      if (claim.meta?.changes) {
+        const annotation=await reasonConversation(env,facts);
+        const complete=JSON.stringify({...facts,modelAnalysis:annotation?{status:'completed',...annotation}:{status:'unavailable'}});
+        await stmt(env.DB,'UPDATE admissions_conversations SET extraction=? WHERE id=? AND extraction=?',complete,row.id,claimed).run();
+        row=await first(env.DB,'SELECT * FROM admissions_conversations WHERE id=?',row.id) || row;
+      }
+    }
+  }
   const extraction = extracted(row.extraction);
   const result = {id:row.id,leadId:row.lead_id,reviewStatus:row.review_status,reviewReason:row.review_reason,
     duplicate,kind:row.kind,direction:row.direction,contentStatus:row.content_status,occurredAt:row.occurred_at,

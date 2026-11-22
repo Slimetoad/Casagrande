@@ -76,7 +76,7 @@ test('las demostraciones públicas muestran modo ficticio sin escribir datos rea
  const before=raw.prepare('SELECT total_changes() n').get().n;
  for(const path of ['/crm','/motor-de-contenidos','/equipo?demo=1']){
   const response=await request(env,path);assert.equal(response.status,200,path);
-  const html=await response.text();assert.match(html,/data-initial-mode="demo"/);assert.match(html,/\/crm-client\.js/);
+  const html=await response.text();if(path==='/motor-de-contenidos')assert.match(html,/id="editorial-demo-start"/);else assert.match(html,/data-initial-mode="demo"/);assert.match(html,/\/crm-client\.js/);
   assert.doesNotMatch(html,/persona@example\.org/);
  }
  assert.equal(raw.prepare('SELECT total_changes() n').get().n,before);
@@ -112,7 +112,7 @@ test('llamada sin teléfono: queda para revisión sin crear identidad ni seguimi
  assert.equal(raw.prepare('SELECT count(*) n FROM conversation_nurture_jobs').get().n,0);
 });
 test('simulador de conversación es útil y no escribe en D1 ni envía tráfico externo',async t=>{
- const {env,raw}=fixture();await lead(env);const before=raw.prepare('SELECT total_changes() n').get().n;
+ const {env,raw}=fixture();Object.assign(env,{ANTHROPIC_API_KEY:'ficticia',ANTHROPIC_MODEL:'claude-haiku-5-5'});await lead(env);const before=raw.prepare('SELECT total_changes() n').get().n;
  t.mock.method(globalThis,'fetch',()=>assert.fail('No debe contactar proveedores'));
  for(const channel of ['email','call']){
   const response=await request(env,'/api/demo/conversacion',json({channel,text:`Me interesa ${programs[0].title}. ¿Cuánto cuesta?`}));
@@ -175,4 +175,37 @@ test('Twilio entrante valida firma y correlaciona discurso repetido una sola vez
  const row=list.conversations[0];assert.equal(row.provider,'twilio');assert.equal(row.extraction.intent,'solicitar_asesor');
  const p=raw.prepare('SELECT consent_email,consent_voice FROM leads WHERE id=?').get(row.leadId);assert.deepEqual({...p},{consent_email:0,consent_voice:0});
  assert.equal(raw.prepare('SELECT count(*) n FROM jobs').get().n,0);
+});
+test('Haiku recibe solo categorías permitidas y el reintento no repite la consulta',async t=>{
+ const {env,raw}=fixture();Object.assign(env,{ANTHROPIC_API_KEY:'clave-ficticia',ANTHROPIC_MODEL:'claude-haiku-5-5'});let hits=0;
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{hits++;assert.equal(url,'https://api.anthropic.com/v1/messages');const payload=JSON.parse(opts.body);
+  assert.equal(payload.model,'claude-haiku-5-5');const input=JSON.stringify(payload.messages);
+  for(const privateValue of ['Nombre Privado','privado@example.org','0991234567','secreto confidencial'])assert.ok(!input.includes(privateValue),privateValue);
+  assert.deepEqual(Object.keys(JSON.parse(payload.messages[0].content)).sort(),['intencion','opciones','programa','revision']);
+  return Response.json({content:[{type:'text',text:'{"opcion":"ficha"}'}]});});
+ const {ingestConversation}=await import('../src/conversation-intake.js');
+ const input={provider:'resend',eventId:'reason-001',email:'privado@example.org',name:'Nombre Privado',direction:'inbound',kind:'email',allowCreate:true,text:`Quiero información sobre ${programs[0].title}. Teléfono 0991234567. secreto confidencial.`};
+ const [a,b]=await Promise.all([ingestConversation(env,input),ingestConversation(env,input)]);
+ await ingestConversation(env,input);assert.equal(hits,1);assert.equal(a.id,b.id);
+ const row=raw.prepare('SELECT extraction FROM admissions_conversations WHERE id=?').get(a.id),facts=JSON.parse(row.extraction);
+ assert.deepEqual(facts.modelAnalysis,{status:'completed',provider:'anthropic',model:'claude-haiku-5-5',reason:'La señal identifica un programa; contrastar su ficha oficial.'});
+ assert.equal(facts.program,programs[0].slug);assert.equal(raw.prepare('SELECT consent_email FROM leads').get().consent_email,0);
+});
+test('Haiku falla de forma segura y no procesa bajas ni modelos distintos',async t=>{
+ const {reasonConversation}=await import('../src/conversation-model.js');let hits=0;
+ t.mock.method(globalThis,'fetch',async()=>{hits++;return Response.json({content:[{type:'text',text:'{"opcion":"autorizar_envio"}'}]})});
+ const env={ANTHROPIC_API_KEY:'ficticia',ANTHROPIC_MODEL:'claude-haiku-5-5'};
+ assert.equal(await reasonConversation(env,{intent:'baja'}),null);
+ assert.equal(await reasonConversation({...env,ANTHROPIC_MODEL:'otro'},{intent:'programa'}),null);assert.equal(hits,0);
+ assert.equal(await reasonConversation(env,{intent:'programa',needsReview:true}),null);assert.equal(hits,1);
+});
+test('un fallo del modelo conserva reglas locales y no se repite en el mismo evento',async t=>{
+ const {env,raw}=fixture();Object.assign(env,{ANTHROPIC_API_KEY:'clave-ficticia',ANTHROPIC_MODEL:'claude-haiku-5-5'});let hits=0;
+ t.mock.method(globalThis,'fetch',async()=>{hits++;throw new Error('proveedor no disponible')});
+ const {ingestConversation}=await import('../src/conversation-intake.js');
+ const input={provider:'resend',eventId:'fallo-modelo',email:'fallo@example.org',direction:'inbound',kind:'email',allowCreate:true,text:`¿Cuánto cuesta ${programs[0].title}?`};
+ const first=await ingestConversation(env,input);await ingestConversation(env,input);assert.equal(hits,1);
+ const facts=JSON.parse(raw.prepare('SELECT extraction FROM admissions_conversations WHERE id=?').get(first.id).extraction);
+ assert.equal(facts.intent,'inversion');assert.equal(facts.modelAnalysis.status,'unavailable');
+ assert.equal(raw.prepare('SELECT consent_email FROM leads').get().consent_email,0);
 });

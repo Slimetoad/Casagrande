@@ -66,15 +66,19 @@ test("platform overview connects the live public spaces and separates staff acce
   assert.equal(overview.status, 200);
   const page = await overview.text();
   assert.match(page, /Plataforma de <em>Posgrados\.<\/em>/);
-  assert.equal([...page.matchAll(/>Demostración pública<\/div>/g)].length, 2);
+  assert.match(page, /Demostración pública<\/div>[\s\S]*?CRM de admisiones/);
   for (const path of ["/","/crm","/motor-de-contenidos"]) {
     assert.ok(page.includes('href="' + path + '"'));
     const response = await visit(path);
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, /href="\/plataforma"/);
-    if (path !== "/") assert.match(html, /data-initial-mode="demo"/);
-    else assert.match(html, /<footer\b[\s\S]+href="\/plataforma">Ver la plataforma<\/a>/);
+    if (path === "/crm") assert.match(html, /data-initial-mode="demo"/);
+    else if (path === "/motor-de-contenidos") {
+      assert.match(html, /href="#plan-editorial">Plan editorial/);
+      assert.match(html, /Ejemplo ficticio/);
+      assert.doesNotMatch(html, /data-initial-mode|data-view="aspirantes"|id="auth-action"/);
+    } else assert.match(html, /<footer\b[\s\S]+href="\/plataforma">Ver la plataforma<\/a>/);
   }
   assert.match(page, /href="\/equipo">Acceso interno/);
   assert.equal((await visit("/equipo")).status, 403);
@@ -292,4 +296,23 @@ test("a booking includes stored or direct UTM only when the browser permits it",
   assert.deepEqual(await book("?utm_campaign=nueva&otro=x"),{utm_campaign:"nueva"});
   assert.deepEqual(await book("?utm_campaign=nueva",{globalPrivacyControl:true}),{});
   assert.deepEqual(await book("",{doNotTrack:"1"}),{});
+});
+
+test('guías publicadas muestran encabezados, fuente UCG y CTA seguros con esquema Article',()=>{
+  const p=programs[0],a={slug:'guia-prueba',program:p.slug,title:'Elegir <tu> maestría',description:'Una guía para comparar.',body:'Introducción segura.\n\nQué revisar\nTexto con <script>alert(1)</script>.',sourceUrl:p.url,published_at:'2026-11-20T10:00:00.000Z',updatedAt:'2026-11-21T10:00:00.000Z'};
+  const html=renderStudent('/guias/'+a.slug,programs,{articles:[a],origin:'https://posgrados.example.org'});
+  assert.match(html,/data-editorial-article="guia-prueba"/);
+  assert.ok(html.includes('src="'+p.image+'"'));
+  assert.match(html,/<time datetime="2026-11-20T10:00:00\.000Z">20 de noviembre de 2026<\/time>/);
+  assert.match(html,/class="article-reading"/);
+  assert.match(html,/<h2>Qué revisar<\/h2><p>Texto con &lt;script&gt;alert\(1\)&lt;\/script&gt;\.<\/p>/);
+  assert.match(html,/data-editorial-cta="programa"/);assert.match(html,/data-editorial-cta="solicitar"/);
+  assert.ok(html.includes('href="/programas/'+p.slug+'"'));assert.ok(html.includes('programa='+p.slug));
+  assert.ok(html.includes(p.url.replaceAll('&','&amp;')));assert.match(html,/rel="external noreferrer"/);
+  const ld=JSON.parse(html.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)[1]);
+  const article=ld.find(x=>x['@type']==='Article');assert.equal(article.headline,a.title);assert.equal(article.datePublished,a.published_at);assert.equal(article.citation,p.url);
+  for(const sourceUrl of ['https://casagrande.edu.ec.ejemplo.org/robo','https://user:pass@casagrande.edu.ec/a','javascript:alert(1)']){
+    const bad=renderStudent('/guias/'+a.slug,programs,{articles:[{...a,sourceUrl}]});
+    assert.doesNotMatch(bad,/Ficha institucional del programa/);assert.ok(!bad.includes(sourceUrl));
+  }
 });

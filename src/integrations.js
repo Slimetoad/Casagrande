@@ -4,7 +4,7 @@ import {conversationIntakeReady, ingestConversation} from './conversation-intake
 import {reconcileNurtureEmail} from './conversation-nurture.js';
 import {recordMailLoopback} from './mail-loopback.js';
 import {activeAI, aiText, all, channelPhone, clean, configRows, digest, e164, eligibleQuery, enabled, getSearchConsole, getSemrush, gscReady,
-  incrementLimit, inHours, mailReady, matches, normalized, now, programFact, publicOrigin, redact,
+  incrementLimit, inHours, mailReady, matches, normalized, now, outreachStartAt, programFact, publicOrigin, redact,
   requestRemote, retellReady, select, selectedVoice, semrushReady, ServiceError, verifyMac, voiceReady, whatsappKinds, whatsappReady} from './providers.js';
 
 const json=(value,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store'}});
@@ -138,6 +138,7 @@ async function editArticle(req,env,id,operator){
   if(!['publish','archive','save'].includes(data.action))throw new ServiceError('Acción editorial no válida.',400);
   const row=await select(env.DB,'SELECT * FROM seo_articles WHERE id=?',id).first();
   if(!row)throw new ServiceError('No encontramos esa guía.',404);
+  if(row.opportunity_id.startsWith('editorial:'))throw new ServiceError('Usa el plan editorial para editar esta guía.',409);
   const title=data.title===undefined?row.title:textValue(data.title,170),summary=data.summary===undefined?row.summary:textValue(data.summary,400),body=data.body===undefined?row.body:textValue(data.body,12000);
   if(title.length<5 || summary.length<10 || body.length<100)throw new ServiceError('Revisa el título, el resumen y el contenido de la guía.',400);
   const status=data.action==='publish'?'published':data.action==='archive'?'archived':row.status,date=now();
@@ -203,21 +204,21 @@ async function emailCopy(env,job,lead,program){
   const replyTo=await recruitmentReplyTo(env,lead)||env.RESEND_REPLY_TO;
   return {from:env.RESEND_FROM,to:[lead.email],tags:[{name:'flujo',value:'posgrados-ucg'},{name:'seguimiento',value:job.id}],subject,text:lines.join('\n\n'),...(replyTo?{reply_to:replyTo}:{}),headers:{'List-Unsubscribe':'<'+base+'/api/preferences/'+lead.pref_token+'>','List-Unsubscribe-Post':'List-Unsubscribe=One-Click'}};
 }
-async function dispatchSnapshot(env,job,lead){
+async function dispatchSnapshot(env,job,lead,startsAt){
   const voice=job.channel==='voice';
   const allowed=voice?' AND NOT EXISTS(SELECT 1 FROM voice_suppressions WHERE phone=?) AND NOT EXISTS(SELECT 1 FROM leads other WHERE other.phone=l.phone AND other.id<>l.id)':'';
   const db=env.DB;
-  const current=await select(db,"SELECT l.* FROM leads l JOIN jobs j ON j.lead_id=l.id WHERE j.id=? AND j.channel=? AND j.kind=? AND j.status='processing' AND "+admissionProof+allowed,job.id,job.channel,job.kind,...(voice?[channelPhone(lead.phone)]:[])).first();
+  const current=await select(db,"SELECT l.* FROM leads l JOIN jobs j ON j.lead_id=l.id WHERE j.id=? AND j.channel=? AND j.kind=? AND j.status='processing' AND j.created_at>=? AND "+admissionProof+allowed,job.id,job.channel,job.kind,startsAt,...(voice?[channelPhone(lead.phone)]:[])).first();
   return canDispatch(current,job.channel,job.kind) && current.program===lead.program &&
     (voice?current.phone===lead.phone:current.email===lead.email && current.name===lead.name && current.source===lead.source && current.pref_token===lead.pref_token);
 }
-async function submitJob(env,job,lead,programs,provider){
+async function submitJob(env,job,lead,programs,provider,startsAt){
   const p=programs.find(p=>p.slug===lead.program);
-  if(provider==='WhatsApp')return submitWhatsapp(env,job,lead);
-  if(provider==='Retell AI')return voiceHours()?submitRetell(env,job,lead,p):null;
+  if(provider==='WhatsApp')return submitWhatsapp(env,job,lead,startsAt);
+  if(provider==='Retell AI')return voiceHours()?submitRetell(env,job,lead,p,startsAt):null;
   if(job.channel==='email'){
     const copy=await emailCopy(env,job,lead,p);
-    if(!await dispatchSnapshot(env,job,lead))return null;
+    if(!await dispatchSnapshot(env,job,lead,startsAt))return null;
     const res=await requestRemote('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':'admisiones-'+job.id},body:JSON.stringify(copy)},'Resend');
     const id=(await res.json()).id;if(!id)throw new ServiceError('Resend no devolvió un identificador de envío.');return id;
   }
@@ -227,7 +228,7 @@ async function submitJob(env,job,lead,programs,provider){
   const base=publicOrigin(env)+'/api/webhooks/twilio/';
   const prompt='Hola, te llama el asistente automatizado de posgrados de la Universidad Casa Grande por tu solicitud de orientación. Puedes preguntar por la duración, la modalidad o el costo de tu programa. Di asesor o marca uno si quieres hablar con una persona. Marca dos para escuchar la ficha. Para dejar de recibir llamadas, di darme de baja o marca nueve.';
   const body=new URLSearchParams({To:to,From:env.TWILIO_FROM,Timeout:'18',TimeLimit:'120',StatusCallback:base+'status/'+job.id,StatusCallbackEvent:'completed',StatusCallbackMethod:'POST',Twiml:'<Response>'+gather(base+'menu/'+job.id,prompt,6)+say('Gracias por tu tiempo. Hasta pronto.')+'</Response>'});
-  if(!await dispatchSnapshot(env,job,lead) || !voiceHours())return null;
+  if(!await dispatchSnapshot(env,job,lead,startsAt) || !voiceHours())return null;
   const res=await requestRemote(endpoint,{method:'POST',headers:{Authorization:'Basic '+btoa(env.TWILIO_ACCOUNT_SID+':'+env.TWILIO_AUTH_TOKEN)},body},'Twilio');
   const sid=(await res.json()).sid;if(!sid)throw new ServiceError('Twilio no devolvió un identificador de llamada.');return sid;
 }
@@ -239,6 +240,8 @@ export async function runDueJobs(env,programs){
   if(!db)throw new ServiceError('El registro de admisiones no está disponible.',503);
   const counts={accepted:0,skipped:0,retry:0,review:0};
   if(!enabled(env.OUTREACH_ENABLED))return {...counts,status:'en_pausa',message:'El seguimiento externo está pausado. No se realizaron envíos.'};
+  const startsAt=outreachStartAt(env);
+  if(startsAt===null)return {...counts,status:'sin_configurar',message:'Usa una fecha de inicio con hora y zona horaria en OUTREACH_START_AT.'};
   const voice=selectedVoice(env);
   const readyVoice=voice==='twilio'?voiceReady(env):voice==='retell' && retellReady(env);
   const providers={};
@@ -253,25 +256,25 @@ export async function runDueJobs(env,programs){
   const batchSize=Math.max(1,Math.min(32,Number.parseInt(env.OUTREACH_BATCH_SIZE,10)||30));
   const channels=['email','voice'].filter(channel=>providers[channel]);
   const kinds=whatsappKinds(env),date=now();
-  const queue=" WHERE status='pending' AND due_at<=? AND attempts<3 AND "+admissionProof+' AND ';
+  const queue=" WHERE status='pending' AND due_at<=? AND j.created_at>=? AND attempts<3 AND "+admissionProof+' AND ';
   const queries=[],args=[];
   if(channels.length){
     queries.push('SELECT id,lead_id,channel,kind,due_at,NULL AS phone FROM jobs j'+queue+'channel IN ('+channels.map(()=>'?').join(',')+')');
-    args.push(date,...channels);
+    args.push(date,startsAt,...channels);
   }
   if(whatsapp){
     queries.push("SELECT id,lead_id,'whatsapp' AS channel,kind,due_at,phone FROM whatsapp_jobs j"+queue+'kind IN ('+kinds.map(()=>'?').join(',')+')');
-    args.push(date,...kinds);
+    args.push(date,startsAt,...kinds);
   }
   const due=await all(db,queries.join(' UNION ALL ')+' ORDER BY due_at,id LIMIT ?',...args,batchSize);
   async function dispatch(job){
     const date=now();
     const table=jobTable(job.channel), actor=providers[job.channel];
-    const claimed=await select(db,"UPDATE "+table+" SET status='processing',attempts=attempts+1,updated_at=? WHERE id=? AND kind=? AND status='pending' AND due_at<=? AND attempts<3 RETURNING attempts",date,job.id,job.kind,date).first();
+    const claimed=await select(db,"UPDATE "+table+" SET status='processing',attempts=attempts+1,updated_at=? WHERE id=? AND kind=? AND status='pending' AND due_at<=? AND created_at>=? AND attempts<3 RETURNING attempts",date,job.id,job.kind,date,startsAt).first();
     if(!claimed)return;
     const lead=await select(db,'SELECT * FROM leads WHERE id=?',job.lead_id).first();
     let provider;
-    try {if(canDispatch(lead,job.channel,job.kind))provider=await submitJob(env,job,lead,programs,actor);}
+    try {if(canDispatch(lead,job.channel,job.kind))provider=await submitJob(env,job,lead,programs,actor,startsAt);}
     catch(e){
       // Retry only explicit rate limiting. Ambiguous network/server results require reconciliation.
       const code=e.remoteStatus,limited=code===429 && claimed.attempts<3;

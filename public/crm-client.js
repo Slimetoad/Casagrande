@@ -24,9 +24,10 @@ const empty=(title,desc)=>'<div class="empty"><strong>'+esc(title)+'</strong>'+e
 const action=(label,id,cls='ghost small',extra='')=>'<button type="button" class="'+cls+'" data-act="'+id+'" '+extra+'>'+esc(label)+'</button>'
 const item=(id)=>'data-id="'+esc(id)+'"'
 const link=(text,view)=>'<a class="textbtn small" href="#'+view+'">'+esc(text)+'</a>'
-const state = {view:'resumen',mode:'loading',data:{},analytics:null,token:'',blockedReason:'',query:'',stage:'',owner:'',layout:'lista',taskTab:'pendiente',contentTab:'inteligencia',leadResults:null,offset:0,hasNext:false,searchBusy:false,lookupFailed:false,searchSeq:0,loadSeq:0,detailSeq:0,currentDetail:null,programTitles:{},lastFocus:null,citas:null,citasError:'',workspace:null,queueKey:'today',caseDetail:null,caseError:'',intelligence:null,intelligenceError:'',campaignReviews:{},conversations:null,conversationError:'',conversationStatus:'all',nurture:null}
-const publicDemo=['/crm','/motor-de-contenidos'].includes(location.pathname)
-const getView=()=>{const v=location.hash.slice(1);return Object.hasOwn(viewNames,v)?v:(location.pathname==='/motor-de-contenidos'?'contenidos':'resumen')}
+const state = {view:'resumen',mode:'loading',data:{},analytics:null,token:'',blockedReason:'',query:'',stage:'',owner:'',layout:'lista',taskTab:'pendiente',contentTab:'editorial',leadResults:null,offset:0,hasNext:false,searchBusy:false,lookupFailed:false,searchSeq:0,loadSeq:0,detailSeq:0,currentDetail:null,programTitles:{},lastFocus:null,citas:null,citasError:'',workspace:null,queueKey:'today',caseDetail:null,caseError:'',intelligence:null,intelligenceError:'',campaignReviews:{},conversations:null,conversationError:'',conversationStatus:'all',nurture:null}
+const publicEditorial=$('#editorial-public-data') && (location.pathname||'').replace(/\/$/,'')==='/motor-de-contenidos'
+const publicDemo=(location.pathname||'').replace(/\/$/,'')==='/crm'
+const getView=()=>{const v=location.hash.slice(1);return Object.hasOwn(viewNames,v)?v:'resumen'}
 
 const isOpen=t=>t.status!=='hecha'&&t.status!=='done'&&t.status!=='completed'
 const overdue=t=>isOpen(t)&&iso(t.dueAt)&&iso(t.dueAt).valueOf()<Date.now()
@@ -48,7 +49,7 @@ async function load({message}={}){
     if(seq!==state.loadSeq)return
     if(!Array.isArray(data.leads)||!Array.isArray(data.tasks)||!data.metrics)throw Error('La respuesta de la consola está incompleta. Vuelve a intentarlo.')
     state.data=data;state.mode='live';state.blockedReason='';state.leadResults=null;state.lookupFailed=false;state.searchSeq++;state.searchBusy=false;state.offset=0;state.analytics=null
-    render();if(message)notify(message)
+    render();loadActiveEditorial();if(message)notify(message)
     if(state.view==='aspirantes')searchLeads()
     api('/api/staff/citas').then(c=>{if(state.loadSeq===seq){state.citas=c;state.citasError='';if(state.view==='agenda')render()}}).catch(e=>{if(state.loadSeq===seq){state.citas=null;state.citasError=e.message;if(state.view==='agenda')render()}})
     api('/api/staff/intelligence').then(i=>{if(state.loadSeq===seq){state.intelligence=i;state.intelligenceError='';if(state.view==='contenidos')render()}}).catch(e=>{if(state.loadSeq===seq){state.intelligence=null;state.intelligenceError=e.message;if(state.view==='contenidos')render()}})
@@ -165,8 +166,11 @@ function showConversationResult(node,data){
  node.innerHTML='<div class="demo-result"><p class="eyebrow">Resultado del ejemplo · no se enviaron comunicaciones</p><h3>Señales identificadas</h3>'+extractSummary(facts)+'<h3>Propuesta para el equipo</h3><strong>'+esc(conversationLabel(conversationDecisions,plan.title,'Revisar con un asesor')||'Revisar con un asesor')+'</strong><p>'+esc(plan.reason||'')+'</p><div class="extraction-grid">'+[['Acción',conversationLabel(conversationDecisions,plan.action,'Revisar con el equipo')],['Canal',plan.channel?channelName(plan.channel):''],['Plazo',plan.dueMinutes===0?'De inmediato':plan.dueMinutes!=null?number(plan.dueMinutes)+' minutos':'']].filter(([,v])=>v).map(([k,v])=>'<div><small>'+esc(k)+'</small><strong>'+esc(v)+'</strong></div>').join('')+'</div>'+(plan.draft?'<div class="evidence"><strong>Borrador ilustrativo · no enviado</strong><p>'+esc(plan.draft.subject||'')+'</p><p>'+esc(plan.draft.text||'')+'</p></div>':'')+'<p class="fine top-margin">La propuesta es ilustrativa y requiere revisión antes de actuar.</p></div>'
 }
 function conversationPanel(c){
- const lead=c.lead
- showPanel(c.subject||channelName(c.provider),'<div class="inline top-margin">'+badge(channelName(c.provider))+' '+badge(conversationLabel({linked:'Con expediente',unassigned:'Por vincular'},c.reviewStatus,'Por revisar')||'Por revisar','warm')+'</div><p class="fine top-margin">'+esc(c.contact?.name||'Contacto sin asignar')+' · '+esc(date(c.occurredAt,true))+' · Guayaquil</p>'+(c.excerpt?'<blockquote class="conversation-quote">'+esc(c.excerpt)+'</blockquote>':'<p class="fine">'+esc(conversationLabel({partial:'Contenido pendiente de verificación',complete:'Sin extracto disponible'},c.contentStatus,'Sin contenido disponible')||'Sin contenido disponible')+'</p>')+'<section class="panel-block"><p class="eyebrow">Extracción para revisión</p><h3>Contexto de la conversación</h3>'+extractSummary(c.extraction)+'</section><section class="panel-block"><h3>Siguiente paso</h3><p>'+esc(c.demoPlan||'Revisa el expediente y acuerda el siguiente paso con el aspirante.')+'</p>'+(lead?action('Abrir expediente','lead','btn',item(lead.id)):'<p class="fine">La conversación aún no está vinculada a un expediente.</p>')+'</section>','Bandeja de conversaciones')
+ const lead=c.lead,analysis=c.extraction?.modelAnalysis
+ const providers={anthropic:'Anthropic',openai:'OpenAI',gemini:'Google Gemini',google:'Google Gemini'}
+ const model=analysis?.status==='completed'&&state.mode==='live'&&analysis.reason?'<div class="evidence"><strong>Análisis del modelo</strong><p>'+esc(analysis.reason)+'</p>'+
+   ([analysis.provider,analysis.model].some(Boolean)?'<small>'+esc([(Object.hasOwn(providers,analysis.provider)?providers[analysis.provider]:analysis.provider),analysis.model].filter(Boolean).join(' · '))+'</small>':'')+'</div>':''
+ showPanel(c.subject||channelName(c.provider),'<div class="inline top-margin">'+badge(channelName(c.provider))+' '+badge(conversationLabel({linked:'Con expediente',unassigned:'Por vincular'},c.reviewStatus,'Por revisar')||'Por revisar','warm')+'</div><p class="fine top-margin">'+esc(c.contact?.name||'Contacto sin asignar')+' · '+esc(date(c.occurredAt,true))+' · Guayaquil</p>'+(c.excerpt?'<blockquote class="conversation-quote">'+esc(c.excerpt)+'</blockquote>':'<p class="fine">'+esc(conversationLabel({partial:'Contenido pendiente de verificación',complete:'Sin extracto disponible'},c.contentStatus,'Sin contenido disponible')||'Sin contenido disponible')+'</p>')+'<section class="panel-block"><p class="eyebrow">Extracción para revisión</p><h3>Contexto de la conversación</h3>'+extractSummary(c.extraction)+model+'</section><section class="panel-block"><h3>Siguiente paso</h3><p>'+esc(c.demoPlan||'Revisa el expediente y acuerda el siguiente paso con el aspirante.')+'</p>'+(lead?action('Abrir expediente','lead','btn',item(lead.id)):'<p class="fine">La conversación aún no está vinculada a un expediente.</p>')+'</section>','Bandeja de conversaciones')
 }
 async function openConversation(id){
  let c;if(state.mode==='demo')c=arr(state.conversations?.conversations).find(x=>x.id===id)
@@ -194,11 +198,338 @@ async function changeAppointment(id,act,slot=false){
   }
   await api('/api/staff/citas/'+(slot?'slots/':'')+encodeURIComponent(id),'POST',{action:act});await loadCitas();notify('Agenda actualizada.')
 }
+const editorialStatus = {
+  available:'Datos disponibles',vigente:'Datos vigentes',planned:'Propuesta editorial',draft:'Borrador',published:'Publicado en el portal',paused:'Pausado',scheduled:'Programado',
+  verified:'Fuente verificada',unavailable:'Fuente sin verificar',ready:'Conectado',configured:'Conectado',connected:'Conectado',
+  unpublished:'Sin publicar',superseded:'Versión reemplazada',unconfigured:'Sin conexión',pending:'Pendiente',processing:'En proceso',retry:'Reintento pendiente',failed:'Requiere atención',uncertain:'Requiere verificación',
+  sin_configurar:'Sin configurar',pendiente:'Sin sincronizar',disponible:'Datos disponibles',sin_datos:'Sin datos',
+  no_disponible:'No disponible',error:'Error de conexión',bloqueado:'Acceso bloqueado'
+}
+const cmsStatus = {...editorialStatus,published:'Publicado en el sitio oficial',pending:'Pendiente en el sitio oficial'}
+const editorialLabel = (status,labels=editorialStatus) => Object.hasOwn(labels,status)?labels[status]:'Sin estado confirmado'
+const editorialCount = value => Number.isFinite(value)?number(value):'—'
+const editorialDay = value => value&&/^\d{4}-\d{2}-\d{2}$/.test(value)?date(value+'T12:00:00-05:00'):''
+const slugPath = (root,slug) => typeof slug==='string'&&/^[a-z0-9-]{1,170}$/.test(slug)?root+encodeURIComponent(slug):''
+function academicUrl(value) {
+  try {
+    const url=new URL(value);
+    if(url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='casagrande.edu.ec'||url.hostname.endsWith('.casagrande.edu.ec')))return url.href
+  }catch{}
+  return ''
+}
+const editorialLink=(url,label,external=false)=>url?'<a class="textbtn small" href="'+esc(url)+'"'+(external?' rel="external noreferrer"':'')+'>'+esc(label)+'</a>':''
+const publicKeywordGenerator = 'OpenSEO · Keyword Generator'
+const publicKeywordUrl = 'https://openseo.so/keyword-generator'
+const editorialProgram = row => row.programTitle || program(row.program);
+const editorialName = row => row.title || 'Propuesta sin título';
+function editorialEvidence(search) {
+  if(!search?.keyword)return ''
+  const counts=[Number.isFinite(search.volume)?editorialCount(search.volume)+' búsquedas mensuales estimadas':'',
+    Number.isFinite(search.difficulty)?'dificultad SEO estimada '+editorialCount(search.difficulty):'',
+    search.type==='measured'&&Number.isFinite(search.impressions)?editorialCount(search.impressions)+' impresiones observadas':'',
+    search.type==='measured'&&Number.isFinite(search.clicks)?editorialCount(search.clicks)+' clics observados':''].filter(Boolean)
+  const publicGenerator=search.source===publicKeywordGenerator;
+  return '<p class="editorial-signal"><strong>'+esc(search.type==='measured'?'Consulta observada':'Consulta de referencia')+'</strong> '+esc(search.keyword)
+    +(counts.length?' · '+esc(counts.join(' · ')):'')+(search.source?' · '+(publicGenerator?editorialLink(publicKeywordUrl,'OpenSEO · Ecuador',true):esc(search.source)):'')
+    +(search.observedAt?' · '+esc(editorialDay(search.observedAt)||date(search.observedAt)):'')+'</p>'
+}
+function editorialSources(entries, showDetail=false) {
+  const active=['available','ready','configured','connected','verified','disponible','vigente'];
+  return arr(entries).length?'<div class="editorial-sources">'+entries.map(entry=>{
+    const status=entry.state||entry.status
+    return '<div><strong>'+esc(entry.label||entry.source||entry.key||'Fuente editorial')+'</strong>'+badge(editorialLabel(status),active.includes(status)?'good':'warm')+
+      (entry.observedAt?'<small>Datos observados el '+esc(editorialDay(entry.observedAt)||date(entry.observedAt))+'</small>':'')+
+      (showDetail&&entry.detail?'<small>'+esc(entry.detail)+'</small>':'')+'</div>'
+  }).join('')+'</div>':'<p class="fine">Sin información de fuentes disponible.</p>'
+}
+function editorialRows(rows, team) {
+  if(!rows.length)return empty('Aún no hay propuestas para mostrar.','Vuelve a consultar el plan editorial.')
+  const statuses=[...new Set(rows.map(row=>row.status).filter(Boolean))]
+  return `<div data-editorial-list>
+    <div class="editorial-filters"><label>Buscar en el plan<input type="search" data-editorial-query placeholder="Programa o tema"></label>
+    <label>Estado<select data-editorial-status><option value="">Todos los estados</option>${statuses.map(status=>`<option value="${esc(status)}">${esc(editorialLabel(status))}</option>`).join('')}</select></label></div>
+    <p class="fine" role="status" data-editorial-count>${number(rows.length)} propuestas</p>
+    <div class="editorial-rows">${rows.map(row=>{
+      const facts=[row.cluster,row.intent].filter(Boolean).join(' · ');
+      const guide=['published','paused'].includes(row.status)?slugPath('/guias/',row.articleSlug):'';
+      const published=!!guide;
+      const fit=academicUrl(row.sourceUrl);
+      const official=published?academicUrl(row.officialUrl):'';
+      const cms=row.cms?.status;
+      return `<article class="editorial-row" data-editorial-row data-status="${esc(row.status)}" data-query="${esc(norm([editorialProgram(row),editorialName(row),facts].join(' ')))}">
+      <div><p class="editorial-program">${esc(editorialProgram(row))}</p><h3>${esc(editorialName(row))}</h3>
+      ${facts?`<p class="fine">${esc(facts)}</p>`:''}
+      ${team&&row.reason?`<p class="fine">${esc(row.reason)}</p>`:''}
+      ${team||row.evidence?.search?.source===publicKeywordGenerator?editorialEvidence(row.evidence?.search):''}
+      </div><div class="editorial-row-date">${badge(editorialLabel(row.status),published?'good':'warm')}
+      ${row.scheduledAt?`<small>${esc(date(row.scheduledAt,true))} · Guayaquil</small>`:'<small>Sin fecha asignada</small>'}
+      ${team&&cms&&published?`<small>${esc(editorialLabel(cms,cmsStatus))}</small>`:''}</div>
+      <div class="actions editorial-row-actions">${team?action('Abrir ficha','editorial-open','ghost small',item(row.id)):
+        editorialLink(guide,'Leer la guía')+editorialLink(slugPath('/programas/',row.program),'Ver la maestría')+editorialLink(official,'Publicación oficial',true)}
+      ${team?'':editorialLink(fit,'Ficha oficial',true)}</div></article>`
+    }).join('')}</div><p class="fine" data-editorial-empty hidden>No hay propuestas con esos filtros.</p>
+  </div>`
+}
+function bindEditorialFilters(root) {
+  for(const list of root.querySelectorAll('[data-editorial-list]')){
+    const query=list.querySelector('[data-editorial-query]'),status=list.querySelector('[data-editorial-status]');
+    const rows=[...list.querySelectorAll('[data-editorial-row]')];
+    const filter=()=>{
+      let n=0;
+      for(const row of rows){
+        row.hidden=(!row.dataset.query.includes(norm(query.value)))||!!(status.value&&row.dataset.status!==status.value)
+        if(!row.hidden)n++;
+      }
+      list.querySelector('[data-editorial-count]').textContent=number(n)+(n===1?' propuesta':' propuestas');
+      list.querySelector('[data-editorial-empty]').hidden=n!==0;
+    };
+    query.addEventListener('input',filter);status.addEventListener('change',filter);
+  }
+}
+function editorialTotals(metrics) {
+  return '<dl class="editorial-totals">'+metrics.map(([label,value])=>'<div><dt>'+esc(label)+'</dt><dd>'+editorialCount(value)+'</dd></div>').join('')+'</dl>'
+}
+function publicMarketResearch(entries, plan) {
+  const rows=arr(entries).filter(row=>row?.market==='Ecuador' && row.source===publicKeywordGenerator && typeof row.keyword==='string');
+  if(!rows.length)return '<p class="fine">Aún no hay observaciones públicas de búsqueda disponibles.</p>';
+  const names=new Map(plan.map(row=>[row.program,editorialProgram(row)]));
+  return `<details class="editorial-market block" open><summary>Investigación pública en Ecuador · ${number(rows.length)} consultas</summary>
+    <p class="fine" id="editorial-market-explanation">El volumen estima cuántas veces se busca una consulta al mes en Ecuador. La dificultad estima la competencia para posicionarse. El guion indica un dato no disponible. Un cero es un valor informado por la fuente.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Tabla de consultas de Ecuador" aria-describedby="editorial-market-explanation"><table>
+      <caption>Observaciones del generador público de palabras clave de OpenSEO</caption>
+      <thead><tr><th scope="col">Consulta</th><th scope="col">Programa</th><th scope="col">Volumen mensual estimado</th><th scope="col">Dificultad estimada</th><th scope="col">Observación y fuente</th></tr></thead>
+      <tbody>${rows.map(row=>{
+        const title=row.program?names.get(row.program)||program(row.program):'General';
+        const programPath=slugPath('/programas/',row.program);
+        const sourceLink=row.sourceUrl===publicKeywordUrl?editorialLink(publicKeywordUrl,'OpenSEO',true):esc(row.source);
+        return `<tr><th scope="row">${esc(row.keyword)}</th><td>${programPath?editorialLink(programPath,title):esc(title)}</td>
+        <td>${editorialCount(row.volume)}</td><td>${editorialCount(row.difficulty)}</td>
+        <td><span>${row.observedAt?esc(editorialDay(row.observedAt)||date(row.observedAt)):'—'}</span> ${sourceLink}</td></tr>`
+      }).join('')}</tbody>
+    </table></div>
+  </details>`
+}
+function publicEditorialContent(data) {
+  const rows=arr(data.plan),guides=arr(data.guides),metrics=data.metrics||{};
+  const programs=new Set(rows.map(x=>x.program).filter(Boolean)).size;
+  const publicSources=arr(data.sources).filter(row=>['Catálogo institucional UCG',publicKeywordGenerator].includes(row?.label));
+  return `<section class="editorial-section" id="plan-editorial">
+    <div class="block-head"><div><h2>Plan editorial</h2>${editorialDay(data.week)?`<p class="fine">Semana del ${esc(editorialDay(data.week))} · Guayaquil</p>`:''}</div></div>
+    <p class="editorial-section-copy">Las propuestas orientan futuras guías. Las fechas previstas pueden cambiar durante la revisión.</p>
+    ${editorialTotals([['Maestrías incluidas',data.programCount??programs],['Propuestas del plan',metrics.planned??rows.length],['Guías de este plan publicadas',metrics.publishedPortal??rows.filter(row=>row.articleSlug).length]])}
+    <div class="block">${editorialRows(rows,false)}</div>
+  </section>
+  <section class="editorial-section" id="guias-editoriales"><div class="block-head"><h2>Guías publicadas</h2><a href="/guias" class="textbtn small">Ver todas las guías</a></div>
+    ${guides.length?`<div class="editorial-guide-grid">${guides.map(guide=>{
+      const link=slugPath('/guias/',guide.slug);
+      const publishedAt=guide.publishedAt||guide.published_at;
+      const stats=guide.stats||{};
+      return `<article class="block"><p class="editorial-program">${publishedAt?esc(date(publishedAt)):'Guía de posgrados'}</p><h3>${esc(guide.title)}</h3>
+      <p>${esc(guide.summary||guide.description||'')}</p>
+      ${Number.isFinite(stats.views)?`<p class="fine">${number(stats.views)} lecturas registradas${Number.isFinite(stats.days)?' · últimos '+number(stats.days)+' días':''}</p>`:''}
+      ${editorialLink(link,'Leer la guía')}</article>`
+    }).join('')}</div>`:empty('Todavía no se han publicado guías en el portal.','Los borradores aparecerán en la sección de guías cuando termine su revisión.')}
+      </section>
+  <section class="editorial-section" id="fuentes-editoriales"><div class="block-head"><h2>Fuentes de búsqueda</h2></div>
+    <p class="editorial-section-copy">El catálogo institucional respalda las propuestas. Las estimaciones de búsqueda se muestran junto a la consulta y su fuente cuando están disponibles.</p>
+    ${editorialSources(publicSources)}
+    ${publicMarketResearch(data.marketResearch,rows)}
+  </section>`
+}
+function launchPublicEditorial() {
+  const mount=$('#editorial-public-data');
+  if(!mount)return;
+  async function loadPublicPlan() {
+    try {
+      const response=await fetch('/api/editorial/publico',{method:'GET',credentials:'omit',headers:{Accept:'application/json'}});
+      if(!response.ok)throw Error('Plan no disponible.');
+      const data=await response.json();
+      if(!Array.isArray(data.plan))throw Error('Plan no disponible.');
+      mount.innerHTML=publicEditorialContent(data);
+      bindEditorialFilters(mount);
+      if(['#plan-editorial','#guias-editoriales','#fuentes-editoriales'].includes(location.hash))$(location.hash)?.scrollIntoView();
+    }catch{
+      mount.innerHTML='<section class="editorial-section block" id="plan-editorial"><h2>Plan editorial</h2><p role="alert">No se pudo cargar el plan. Puedes volver a consultar.</p><button class="ghost" type="button" id="editorial-public-retry">Reintentar</button></section><section class="editorial-section" id="guias-editoriales"><h2>Guías publicadas</h2><a href="/guias">Consultar las guías disponibles</a></section><section class="editorial-section" id="fuentes-editoriales"><h2>Fuentes de búsqueda</h2><p class="fine">Sin información de fuentes disponible.</p></section>';
+      mount.querySelector('#editorial-public-retry')?.addEventListener('click',loadPublicPlan,{once:true});
+    }
+  }
+  $('#editorial-demo-start')?.addEventListener('click',()=>{
+    const sample=$('#editorial-demo-content');
+    sample.innerHTML='<form class="form-stack"><label>Título de muestra<input name="title" required maxlength="170" value="Cómo revisar la malla antes de elegir una maestría"></label><label>Texto de muestra<textarea name="body" required rows="4" maxlength="1500">Revisa qué aprenderás en cada asignatura. Anota las materias que se relacionan con tus objetivos y lleva tus preguntas a una sesión de orientación.</textarea></label><button class="btn" type="submit">Ver vista previa</button></form><div role="status" data-sample-preview></div>';
+    const form=sample.querySelector('form');
+    form.addEventListener('submit',event=>{
+      event.preventDefault();
+      const data=new FormData(form);
+      sample.querySelector('[data-sample-preview]').innerHTML='<article class="block editorial-sample"><p class="eyebrow">Vista previa ficticia</p><h3>'+esc(data.get('title'))+'</h3><p>'+esc(data.get('body'))+'</p></article>';
+    });
+    form.querySelector('input').focus();
+  });
+  loadPublicPlan();
+}
+
+const editorialDesk = {data:null,week:'',error:'',seq:0,loading:false,performance:null,performanceError:'',performanceLoading:false,metricsSeq:0}
+function editorialWeek(dateValue) {
+  const day=new Date(dateValue+'T12:00:00Z');
+  if(!Number.isFinite(day.valueOf()))return '';
+  day.setUTCDate(day.getUTCDate()-(day.getUTCDay()+6)%7);
+  return day.toISOString().slice(0,10);
+}
+function teamEditorialContent() {
+  const data=editorialDesk.data;
+  if(!data)return editorialDesk.error?empty('No pudimos consultar el plan editorial.',editorialDesk.error)+action('Reintentar','editorial-refresh'): '<p class="fine" role="status">Consultando el plan editorial…</p>';
+  const m=data.metrics||{},c=data.config||{},rows=arr(data.plan);
+  const running=data.enabled===true&&!c.paused;
+  const cms=editorialLabel(data.cms?.status,cmsStatus);
+  const week=editorialDesk.week||data.week;
+  const slots=rows.filter(row=>row.status!=='paused'&&row.scheduledAt&&editorialWeek(localMinute(row.scheduledAt).slice(0,10))===week);
+  return `<section aria-label="Plan editorial del equipo">
+    <div class="editorial-team-header">
+      <div><h2>Plan editorial</h2><p>Ajusta el calendario, revisa el borrador y decide cuándo publicarlo.</p>
+        <div class="inline">${badge(running?'Automatización activa':c.paused?'Automatización pausada':'Automatización desactivada',running?'good':'warm')}
+         ${badge(c.autoPublish===true?'Publicación automática habilitada':'Publicación manual','')}${badge('CMS oficial · '+cms,'')}</div></div>
+      <div class="actions">${action('Actualizar plan','editorial-refresh','ghost small')}${action('Organizar la semana','editorial-plan','btn small')}
+        ${action(c.paused?'Reanudar automatización':'Pausar automatización','editorial-global','ghost small','data-value="'+(c.paused?'resume':'pause')+'"')}</div>
+    </div>
+    ${editorialDesk.error?`<p class="error" role="alert">${esc(editorialDesk.error)}</p>`:''}
+    ${editorialDesk.loading?'<p class="fine" role="status">Actualizando el plan…</p>':''}
+    ${editorialTotals([['Propuestas',m.planned??rows.length],['En calendario',m.scheduled],['Publicadas en portal',m.publishedPortal],['Publicadas en sitio oficial',m.publishedCms],['Pendientes en CMS',m.awaitingCms]])}
+    <details class="editorial-public-sources"><summary>Fuentes y estado de las conexiones</summary>${editorialSources(data.sources,true)}</details>
+    <form class="editorial-week-form" id="editorial-week-form"><label>Semana del calendario<input type="date" name="week" required value="${esc(week)}"></label><button type="submit" class="ghost small">Consultar semana</button><span class="fine">Hora de Guayaquil</span><p class="form-error error" role="alert"></p></form>
+    <div class="editorial-calendar"><h3>Calendario de la semana</h3>${slots.length?`<ul>${slots.map(row=>`<li><span>${esc(date(row.scheduledAt,true))}</span> ${action(row.title,'editorial-open','textbtn small',item(row.id))}</li>`).join('')}</ul>`:'<p class="fine">No hay fechas asignadas a esta semana.</p>'}</div>
+    <h3>Cartera de propuestas</h3>${editorialRows(rows,true)}
+  </section>`
+}
+function editorialPerformanceContent() {
+  const data=editorialDesk.performance;
+  if(!data)return editorialDesk.performanceError?empty('No pudimos consultar el rendimiento.',editorialDesk.performanceError)+action('Reintentar','editorial-performance'): '<p class="fine" role="status">Consultando el rendimiento por guía…</p>';
+  const rows=arr(data.rows);
+  return `<section aria-label="Rendimiento de guías">
+    <div class="block-head"><div><h2>Rendimiento por guía</h2><p class="fine">${Number.isFinite(data.days)?'Últimos '+number(data.days)+' días. ':''}El seguimiento de solicitudes y matrículas se atribuye a los enlaces etiquetados de cada guía.</p></div>${action('Actualizar','editorial-performance','ghost small')}</div>
+    ${rows.length?`<div class="table-wrap" tabindex="0" role="region" aria-label="Indicadores por guía"><table>
+      <thead><tr><th scope="col">Guía</th><th scope="col">Lecturas</th><th scope="col">Clics en acciones</th><th scope="col">Solicitudes</th><th scope="col">Citas</th><th scope="col">Matrículas</th></tr></thead>
+      <tbody>${rows.map(row=>`<tr><td><strong>${esc(row.title)}</strong><small>${esc(editorialProgram(row))}${row.publishedAt?' · '+esc(date(row.publishedAt)):''}</small>
+      ${editorialLink(slugPath('/guias/',row.slug),'Leer la guía')}</td>${['views','ctaClicks','leads','appointments','enrollments'].map(field=>'<td>'+editorialCount(row[field])+'</td>').join('')}</tr>`).join('')}</tbody>
+    </table></div>`:empty('Sin guías publicadas con medición.','Las cifras aparecerán cuando haya guías y observaciones registradas.')}
+    <p class="fine top-margin">Un guion indica que el dato no está disponible. El rendimiento de una guía se mide de forma independiente de las consultas de búsqueda.</p>
+  </section>`
+}
+async function loadEditorial(week=editorialDesk.week) {
+  if(state.mode!=='live')return;
+  const seq=++editorialDesk.seq;
+  editorialDesk.loading=true;
+  editorialDesk.error='';
+  try {
+    const data=await api('/api/staff/editorial'+(week?'?week='+encodeURIComponent(week):''));
+    if(seq!==editorialDesk.seq||state.mode!=='live')return;
+    if(!Array.isArray(data.plan))throw Error('El servidor no devolvió el plan editorial.');
+    editorialDesk.data=data;
+    editorialDesk.week=week||data.week||'';
+    return true;
+  }catch(e){
+    if(seq===editorialDesk.seq)editorialDesk.error=e.message;
+    return false;
+  }finally{
+    if(seq===editorialDesk.seq){
+      editorialDesk.loading=false;
+      if(state.view==='contenidos'&&state.contentTab==='editorial')render();
+    }
+  }
+}
+async function loadEditorialPerformance() {
+  if(state.mode!=='live'||editorialDesk.performanceLoading)return;
+  editorialDesk.performanceLoading=true;
+  editorialDesk.performanceError='';
+  try{editorialDesk.performance=await api('/api/staff/editorial/rendimiento')}
+  catch(e){editorialDesk.performanceError=e.message}
+  finally{editorialDesk.performanceLoading=false;if(state.view==='contenidos'&&state.contentTab==='rendimiento')render()}
+}
+function programKeywordMetrics(data,slug) {
+  const programme=arr(data.programs).find(row=>row.program===slug);
+  const keywords=arr(programme?.keywords);
+  const sources=arr(programme?.sources).length?programme.sources:data.sources;
+  return editorialSources(sources,true)+(keywords.length?`<div class="table-wrap top-margin" tabindex="0" role="region" aria-label="Métricas por consulta"><table>
+   <thead><tr><th scope="col">Consulta y observación</th><th scope="col">Volumen estimado</th><th scope="col">Dificultad estimada</th><th scope="col">Impresiones</th><th scope="col">Clics</th><th scope="col">CTR</th><th scope="col">Posición</th><th scope="col">CPC estimado</th></tr></thead>
+   <tbody>${keywords.map(row=>`<tr><td><strong>${esc(row.keyword)}</strong><small>${esc(row.source||'Fuente de búsqueda')}${row.observedAt?' · '+esc(editorialDay(row.observedAt)||date(row.observedAt)):''}</small></td>${['volume','difficulty','impressions','clicks'].map(key=>'<td>'+editorialCount(row[key])+'</td>').join('')}<td>${Number.isFinite(row.ctr)?new Intl.NumberFormat('es-EC',{style:'percent',maximumFractionDigits:2}).format(row.ctr):'—'}</td><td>${editorialCount(row.position)}</td><td>${editorialCount(row.cpc)}</td></tr>`).join('')}</tbody>
+  </table></div>`:'<p class="fine top-margin">Todavía no hay datos de búsqueda observados para este programa.</p>');
+}
+function openEditorial(id) {
+  if(state.mode!=='live')throw Error('Esta acción requiere acceso al equipo.');
+  const entry=arr(editorialDesk.data?.plan).find(row=>row.id===id);
+  if(!entry)throw Error('Esta propuesta ya no está en el plan.');
+  const article=entry.article,paused=entry.status==='paused',published=!!slugPath('/guias/',entry.articleSlug);
+  const cms=entry.cms||{},official=academicUrl(entry.sourceUrl),officialGuide=academicUrl(entry.officialUrl||cms.url);
+  const maySchedulePublication=editorialDesk.data?.config?.autoPublish===true&&!!article&&!published&&!paused;
+  const generation=entry.generation;
+  const generationLabel=({catalogo:'Borrador preparado con el catálogo institucional',modelo:'Borrador asistido por modelo',edicion_privada:'Última versión editada por el equipo'})[generation?.source];
+  const publicationText=published?'Al confirmar se actualizará la versión pública de esta guía.':'Al confirmar se publicará una guía en el portal.';
+  const edit=article?`<form id="editorial-copy-form" data-id="${esc(entry.id)}">
+    <label>Título<input name="title" value="${esc(article.title)}" required minlength="8" maxlength="180"></label>
+    <label>Descripción<textarea name="summary" rows="2" required minlength="35" maxlength="400">${esc(article.summary)}</textarea></label>
+    <label>Contenido<textarea name="body" rows="9" required minlength="150" maxlength="12000">${esc(article.body)}</textarea></label>
+    ${paused?'':`<p class="fine">${publicationText} El sitio oficial requiere confirmación del CMS.</p><label class="checkbox"><input type="checkbox" name="reviewed">Revisé la ficha institucional y el texto para autorizar su publicación.</label>`}
+    <div class="form-error error" role="alert"></div><div class="actions">${paused?'':'<button class="ghost" type="submit" data-value="save">Guardar borrador</button>'}
+    ${paused?'':`<button class="btn orange" type="submit" data-value="publish">${published?'Publicar actualización':'Publicar en el portal'}</button>`}</div>
+    </form>`:`<p class="fine">Prepara un borrador a partir de esta propuesta y su fuente académica.</p>${paused?'':action('Preparar borrador','editorial-draft','btn',item(id))}`;
+  showPanel(editorialName(entry),`<p class="editorial-program top-margin">${esc(editorialProgram(entry))}</p>
+    <div class="inline">${badge(editorialLabel(entry.status),published?'good':'warm')} ${badge(editorialLabel(entry.sourceStatus))}</div>
+    <div class="actions top-margin">${editorialLink(official,'Consultar ficha oficial',true)}
+    ${published?editorialLink(slugPath('/guias/',entry.articleSlug),'Ver publicación en portal'):''}
+    ${cms.status==='published'?editorialLink(officialGuide,'Ver publicación en el sitio oficial',true):''}
+    ${['retry','failed','uncertain'].includes(cms.status)?action('Reintentar publicación oficial','editorial-retry-cms','ghost small',item(id)):''}
+    ${published&&!paused?'':action(paused?'Reanudar propuesta':'Pausar propuesta','editorial-item-state','ghost small',item(id)+' data-value="'+(paused?'resume':'pause')+'"')}</div>
+    ${published&&entry.hasPrivateDraft?'<p class="fine top-margin">Hay un borrador privado más reciente que la guía publicada.</p>':''}
+    ${published?`<p class="fine top-margin">CMS oficial · ${esc(editorialLabel(cms.status,cmsStatus))}${cms.lastError?' · '+esc(cms.lastError):''}</p>`:''}
+    <section class="panel-block"><h3>Calendario editorial</h3>${published?`<p>${entry.publishedAt?'Publicada en el portal el '+esc(date(entry.publishedAt,true)):'Disponible en el portal'}</p>`:paused?'<p class="fine">Reanuda la propuesta para cambiar la fecha.</p>':
+      `<form class="editorial-week-form" id="editorial-date-form" data-id="${esc(entry.id)}"><label>Fecha prevista · Guayaquil<input type="datetime-local" name="scheduledAt" value="${esc(localMinute(entry.scheduledAt))}" required></label><button type="submit" class="ghost small">Guardar fecha</button>${entry.scheduledAt?action('Retirar fecha','editorial-unschedule','textbtn small',item(id)):''}
+      ${maySchedulePublication?`<label class="checkbox editorial-schedule-check"><input type="checkbox" name="autoPublish"${entry.autoReady?' checked':''}>Revisé el borrador y autorizo su publicación automática en esa fecha.</label>`:''}<p class="form-error error" role="alert"></p></form>`}</section>
+    <section class="panel-block"><h3>Texto de la guía</h3>
+      ${generationLabel?`<p class="fine">${esc([generationLabel,generation.provider,generation.model,generation.checkedAt?date(generation.checkedAt):''].filter(Boolean).join(' · '))}</p>`:''}${edit}</section>
+    <section class="panel-block"><h3>Medición del programa</h3>${editorialEvidence(entry.evidence?.search)}<div id="editorial-keywords" role="region" aria-label="Datos de búsqueda"><p class="fine" role="status">Consultando las fuentes de búsqueda…</p></div></section>`,'Plan editorial');
+  const mount=$('#editorial-keywords');
+  const seq=++editorialDesk.metricsSeq;
+  api('/api/staff/openseo?programa='+encodeURIComponent(entry.program)).then(data=>{
+    if(seq===editorialDesk.metricsSeq&&mount.isConnected)mount.innerHTML=programKeywordMetrics(data,entry.program);
+  }).catch(()=>{
+    if(seq===editorialDesk.metricsSeq&&mount.isConnected)mount.innerHTML='<p class="fine">Medición externa sin datos disponibles. La ficha institucional sigue disponible como fuente editorial.</p>';
+  });
+}
+async function changeEditorial(actionName,id,fields={},reopen=true) {
+  if(state.mode!=='live')throw Error('Esta acción requiere acceso al equipo.');
+  const entry=id?arr(editorialDesk.data?.plan).find(row=>row.id===id):null;
+  if(id&&!entry)throw Error('Vuelve a cargar el plan editorial.');
+  const globalRevision=editorialDesk.data?.config?.revision;
+  const endpoint='/api/staff/editorial'+(editorialDesk.week?'?week='+encodeURIComponent(editorialDesk.week):'');
+  const response=await api(endpoint,'POST',{action:actionName,...(id?{id,revision:entry.revision}:
+    Number.isInteger(globalRevision)&&['pause','resume'].includes(actionName)?{revision:globalRevision}:{}),...fields});
+  if(Array.isArray(response.plan)){
+    editorialDesk.seq++;
+    editorialDesk.loading=false;
+    editorialDesk.data=response;
+    editorialDesk.error='';
+    if(state.view==='contenidos'&&state.contentTab==='editorial')render();
+  }else if(!await loadEditorial()){
+    notify('Cambio registrado. Actualiza el plan para ver la versión actual.');
+    return false;
+  }
+  if(reopen){
+    if(id&&$('#panel').open)openEditorial(id);
+    notify(response.message||'Plan editorial actualizado.');
+  }
+  return true;
+}
+function loadActiveEditorial() {
+  if(state.mode!=='live'||state.view!=='contenidos')return
+  if(state.contentTab==='editorial'&&!editorialDesk.data&&!editorialDesk.loading&&!editorialDesk.error)loadEditorial()
+  if(state.contentTab==='rendimiento'&&!editorialDesk.performance&&!editorialDesk.performanceError)loadEditorialPerformance()
+}
+
 function seo(){
   const opp=arr(state.data.opportunities),articles=arr(state.data.articles)
+  const tabs=[...(state.mode==='live'?[['editorial','Plan editorial'],['rendimiento','Rendimiento por guía']]:[]),
+    ['inteligencia','Inteligencia de captación'],['oportunidades','Oportunidades de búsqueda'],['articulos','Mesa editorial']]
   return (state.mode==='demo'?'<section class="demo-intro motor-intro"><div><p class="eyebrow">Motor de contenidos · demostración</p><h2>De una pregunta real a una guía útil.</h2><p>Explora una oportunidad simulada, genera un borrador, edítalo y publica una vista previa. Nada se publica en el portal.</p></div><div class="actions">'+action('Ver oportunidad y crear borrador','demo-motor','btn orange')+'<a href="/crm" class="ghost">Explorar CRM</a></div></section>':'')+heading('Contenido SEO','Captación orgánica','Convierte búsquedas reales en guías de posgrados y revisa cada texto antes de publicarlo.',(state.mode==='live'?'<a class="ghost small" href="/equipo/conversion">Rendimiento de las fichas</a>':'')+action('Sincronizar búsquedas','sync','btn'))+
-  '<section class="block"><div class="tabs">'+[['inteligencia','Inteligencia de captación'],['oportunidades','Oportunidades de búsqueda'],['articulos','Mesa editorial']].map(([v,n])=>action(n,'seo-tab','tab','data-value="'+v+'" aria-pressed="'+(state.contentTab===v)+'"')).join('')+'</div>'+
-  (state.contentTab==='inteligencia'?intelligenceBoard():state.contentTab==='oportunidades'?(opp.length?'<div class="table-wrap"><table><thead><tr><th>Consulta y fuente</th><th>Impresiones</th><th>Clics</th><th>Volumen estimado</th><th>Posición</th><th>Actualización</th><th>Acción</th></tr></thead><tbody>'+opp.map(o=>'<tr><td><strong>'+esc(o.query)+'</strong><small>'+esc(o.source||'')+'</small></td><td>'+ (o.impressions==null?'—':number(o.impressions))+'</td><td>'+(o.clicks==null?'—':number(o.clicks))+'</td><td>'+(o.volume==null?'—':number(o.volume))+'</td><td>'+(o.position==null?'—':number(Number(o.position).toFixed(1)))+'</td><td>'+esc(date(o.updatedAt))+'</td><td>'+action('Preparar borrador','draft','ghost small',item(o.id))+'</td></tr>').join('')+'</tbody></table></div>':empty('Aún no hay consultas sincronizadas.','Conecta una fuente de búsquedas en Agentes y canales y ejecuta la sincronización.')):(articles.length?'<div class="list">'+articles.map(a=>'<div class="list-row"><div class="list-detail"><button data-act="article" class="list-name" '+item(a.id)+'>'+esc(a.title)+'</button><small>'+esc(a.sourceQuery||'')+'</small></div>'+badge(state.mode==='demo'&&a.status==='published'?'Vista previa publicada':word(a.status),a.status==='published'?'good':'warm')+'</div>').join('')+'</div>':empty('La mesa editorial está vacía.','Prepara un borrador a partir de una oportunidad de búsqueda.')))+'</section>'
+  '<section class="block"><div class="tabs">'+tabs.map(([v,n])=>action(n,'seo-tab','tab','data-value="'+v+'" aria-pressed="'+(state.contentTab===v)+'"')).join('')+'</div>'+
+  (state.contentTab==='editorial'?teamEditorialContent():state.contentTab==='rendimiento'?editorialPerformanceContent():state.contentTab==='inteligencia'?intelligenceBoard():state.contentTab==='oportunidades'?(opp.length?'<div class="table-wrap"><table><thead><tr><th>Consulta y fuente</th><th>Impresiones</th><th>Clics</th><th>Volumen estimado</th><th>Posición</th><th>Actualización</th><th>Acción</th></tr></thead><tbody>'+opp.map(o=>'<tr><td><strong>'+esc(o.query)+'</strong><small>'+esc(o.source||'')+'</small></td><td>'+ (o.impressions==null?'—':number(o.impressions))+'</td><td>'+(o.clicks==null?'—':number(o.clicks))+'</td><td>'+(o.volume==null?'—':number(o.volume))+'</td><td>'+(o.position==null?'—':number(Number(o.position).toFixed(1)))+'</td><td>'+esc(date(o.updatedAt))+'</td><td>'+action('Preparar borrador','draft','ghost small',item(o.id))+'</td></tr>').join('')+'</tbody></table></div>':empty('Aún no hay consultas sincronizadas.','Conecta una fuente de búsquedas en Agentes y canales y ejecuta la sincronización.')):(articles.length?'<div class="list">'+articles.map(a=>'<div class="list-row"><div class="list-detail"><button data-act="article" class="list-name" '+item(a.id)+'>'+esc(a.title)+'</button><small>'+esc(a.sourceQuery||'')+'</small></div>'+badge(state.mode==='demo'&&a.status==='published'?'Vista previa publicada':word(a.status),a.status==='published'?'good':'warm')+'</div>').join('')+'</div>':empty('La mesa editorial está vacía.','Prepara un borrador a partir de una oportunidad de búsqueda.')))+'</section>'
 }
 function campaignLink(value){try{const u=new URL(value,location.origin);return u.origin===location.origin&&(u.pathname==='/programas'||u.pathname.startsWith('/programas/'))?u.href:''}catch{return ''}}
 function campaignInfo(c){
@@ -245,6 +576,7 @@ function render(){
   if(state.mode==='locked'||state.mode==='error'){$('#content').innerHTML=heading('Admisiones','Posgrados UCG')+accessPage();return}
   const notice=state.mode==='demo'?'<div class="notice"><p><strong>Demostración</strong> Datos ficticios. Los cambios solo duran mientras exploras esta sesión.</p>'+(publicDemo?'':action('Salir de la demo','exit-demo','textbtn small'))+'</div>':''
   $('#content').innerHTML=notice+({resumen:overview,aspirantes:students,conversaciones:inbox,agenda,contenidos:seo,agentes:agents}[v])()
+  if(v==='contenidos'&&state.contentTab==='editorial')bindEditorialFilters($('#content'))
 }
 function showPanel(title,body,kicker='Admisiones'){
   const dialog=$('#panel');if(!dialog.open)state.lastFocus=document.activeElement
@@ -347,7 +679,7 @@ function demoConversations(){
  return {conversations:[{id:'conv-demo-email',provider:'email',subject:'Opciones de financiamiento',excerpt:'Quiero empezar el próximo semestre y me gustaría conocer las opciones de financiamiento. Prefiero que me respondan por correo.',occurredAt:now,contact:{name:leads[1].name},lead:leads[1],reviewStatus:'Por revisar',extraction:{programTitle:program(leads[1].program),intent:'inversion',obstacle:'Presupuesto o financiamiento',timeframe:'Próximo semestre',contactPreference:'email',evidence:[{field:'intent',quote:'me gustaría conocer las opciones de financiamiento'},{field:'contactPreference',quote:'Prefiero que me respondan por correo.'}],needsReview:true},demoPlan:'Revisar las opciones vigentes y responder por correo, si el permiso de contacto lo permite.'},{id:'conv-demo-call',provider:'call',subject:'Consulta tras llamada de orientación',excerpt:'La aspirante quiere comparar horarios y necesita hablar con un asesor antes de decidir.',occurredAt:now,contact:{name:leads[2].name},lead:leads[2],reviewStatus:'Por revisar',extraction:{programTitle:program(leads[2].program),intent:'solicitar_asesor',evidence:[{field:'intent',quote:'necesita hablar con un asesor antes de decidir'}],needsReview:true},demoPlan:'Asignar una tarea al asesor para confirmar horarios y acompañar la decisión.'}]}
 }
 function enableDemo(){
-  closePanel();state.loadSeq++;state.searchSeq++;state.detailSeq++;state.mode='demo';state.data=demoData();state.citas={slots:[{id:'slot-demo',startAt:new Date(Date.now()+86400000).toISOString(),endAt:new Date(Date.now()+88200000).toISOString(),minutes:30,advisor:'María Torres',status:'available'}],appointments:[{id:'cita-demo',leadId:'ej-1',name:'Mateo Vera',email:'aspirante2@example.org',program:state.data.leads[1].program,preference:'Prefiere una conversación por la tarde',status:'requested'}]};state.citasError='';state.conversationError='';state.conversations=demoConversations();state.queueKey='today';state.workspace=demoWorkspace('today');state.intelligence={window:{days:30},sources:[{source:'Ejemplo simulado',status:'configured',detail:'Datos ficticios para explorar la mesa.'}],gaps:[],candidates:[{id:'candidate-demo',program:state.data.leads[1].program||'ejemplo',title:'Orientación de posgrados',query:'Cómo elegir una maestría',intent:'Orientación',action:'Revisar una guía para aspirantes que comparan opciones.',reasons:['Consulta frecuente en la demostración'],metrics:{leads:3,advanced:1,enrolled:0,impressions:160,clicks:12},opportunityId:'op-ej'}],campaigns:[]};state.intelligenceError='';state.analytics=null;state.currentDetail=null;state.leadResults=null;state.offset=0;state.hasNext=false;state.searchBusy=false;state.lookupFailed=false;render()
+  closePanel();state.loadSeq++;state.searchSeq++;state.detailSeq++;state.mode='demo';state.contentTab='inteligencia';state.data=demoData();state.citas={slots:[{id:'slot-demo',startAt:new Date(Date.now()+86400000).toISOString(),endAt:new Date(Date.now()+88200000).toISOString(),minutes:30,advisor:'María Torres',status:'available'}],appointments:[{id:'cita-demo',leadId:'ej-1',name:'Mateo Vera',email:'aspirante2@example.org',program:state.data.leads[1].program,preference:'Prefiere una conversación por la tarde',status:'requested'}]};state.citasError='';state.conversationError='';state.conversations=demoConversations();state.queueKey='today';state.workspace=demoWorkspace('today');state.intelligence={window:{days:30},sources:[{source:'Ejemplo simulado',status:'configured',detail:'Datos ficticios para explorar la mesa.'}],gaps:[],candidates:[{id:'candidate-demo',program:state.data.leads[1].program||'ejemplo',title:'Orientación de posgrados',query:'Cómo elegir una maestría',intent:'Orientación',action:'Revisar una guía para aspirantes que comparan opciones.',reasons:['Consulta frecuente en la demostración'],metrics:{leads:3,advanced:1,enrolled:0,impressions:160,clicks:12},opportunityId:'op-ej'}],campaigns:[]};state.intelligenceError='';state.analytics=null;state.currentDetail=null;state.leadResults=null;state.offset=0;state.hasNext=false;state.searchBusy=false;state.lookupFailed=false;render()
 }
 function showMenu(){const open=$('.app').classList.toggle('menu-open');$('.mobile-toggle').setAttribute('aria-expanded',String(open));$('.nav-scrim').hidden=!open}
 function hideMenu(){if($('.app').classList.contains('menu-open'))showMenu()}
@@ -400,6 +732,7 @@ async function changeArticle(id,actionName,fields={}){
   if(state.mode==='demo'){const a=state.data.articles.find(x=>x.id===id);Object.assign(a,fields,{status:actionName==='save'?a.status:actionName==='publish'?'published':'archived'});closePanel();render();notify(actionName==='publish'?'Vista previa publicada solo en esta demostración.':'Revisión guardada en la demostración.');return}
   const article=arr(state.data.articles).find(x=>x.id===id);const r=await api('/api/staff/articles/'+encodeURIComponent(id),'POST',{action:actionName,...fields,updatedAt:article?.updatedAt});closePanel();await load({message:r.message||'Estado editorial actualizado.'})
 }
+if(publicEditorial){launchPublicEditorial();return}
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-act]');if(!b)return;const key=b.dataset.act,id=b.dataset.id
   const lock=async fn=>{b.disabled=true;try{await fn()}finally{b.disabled=false}}
@@ -428,7 +761,16 @@ document.addEventListener('click',async e=>{
     else if(key==='layout'){state.layout=b.dataset.value;render()}
     else if(key==='task-tab'){state.taskTab=b.dataset.value;render()}
     else if(key==='demo-motor'){state.contentTab='oportunidades';render()}
-    else if(key==='seo-tab'){state.contentTab=b.dataset.value;render()}
+    else if(key==='seo-tab'){state.contentTab=b.dataset.value;render();loadActiveEditorial()}
+    else if(key==='editorial-refresh')await lock(loadEditorial)
+    else if(key==='editorial-performance')await lock(loadEditorialPerformance)
+    else if(key==='editorial-plan')await lock(()=>changeEditorial('plan'))
+    else if(key==='editorial-global')await lock(()=>changeEditorial(b.dataset.value))
+    else if(key==='editorial-open')openEditorial(id)
+    else if(key==='editorial-draft')await lock(()=>changeEditorial('draft',id))
+    else if(key==='editorial-retry-cms')await lock(()=>changeEditorial('retryCms',id))
+    else if(key==='editorial-unschedule')await lock(()=>changeEditorial('schedule',id,{scheduledAt:null}))
+    else if(key==='editorial-item-state')await lock(()=>changeEditorial(b.dataset.value,id))
     else if(key==='next'||key==='previous'){state.offset=Math.max(0,state.offset+(key==='next'?50:-50));await searchLeads()}
     else if(key==='brief')await lock(()=>prepareBrief(id))
     else if(key==='copy-brief')await copyBrief()
@@ -442,12 +784,31 @@ document.addEventListener('click',async e=>{
   }catch(err){if(err.status===409&&['campaign-action','campaign-create'].includes(key)){await refreshIntelligence();notify('La propuesta cambió. Se cargó la versión actual; revisa antes de continuar.')}else notify(err.message)}
 })
 document.addEventListener('submit',async e=>{
-  const f=e.target;if(!['access-form','lead-form','article-form','slot-form','case-form','conversation-form'].includes(f.id)&&!f.classList.contains('assign-form'))return;e.preventDefault()
-  const button=f.querySelector('[type=submit]');button.disabled=true
+  const f=e.target;if(!['access-form','lead-form','article-form','slot-form','case-form','conversation-form','editorial-week-form','editorial-date-form','editorial-copy-form'].includes(f.id)&&!f.classList.contains('assign-form'))return;e.preventDefault()
+  const button=e.submitter||f.querySelector('[type=submit]');button.disabled=true
   const err=f.querySelector('.form-error');if(err)err.textContent=''
   const fd=new FormData(f);const val=k=>String(fd.get(k)||'').trim()
   try{
-    if(f.id==='conversation-form'){
+    if(f.id==='editorial-week-form'){
+      const monday=editorialWeek(val('week'));if(!monday)throw Error('Selecciona una fecha válida.');await loadEditorial(monday);
+    }else if(f.id==='editorial-date-form'){
+      const start=iso(val('scheduledAt')+'-05:00');if(!start)throw Error('Selecciona una fecha y hora válidas.');
+      await changeEditorial('schedule',f.dataset.id,{scheduledAt:start.toISOString(),...(fd.has('autoPublish')?{autoPublish:true}:{})});
+    }else if(f.id==='editorial-copy-form'){
+      const requested=button.dataset?.value==='publish'?'publish':'save';
+      if(requested==='publish'&&!fd.has('reviewed'))throw Error('Confirma que revisaste la fuente y el texto antes de publicar.');
+      const fields={title:val('title'),summary:val('summary'),body:val('body')};
+      const id=f.dataset.id;
+      if(requested==='publish'){
+        const current=arr(editorialDesk.data?.plan).find(row=>row.id===id)?.article;
+        if(Object.keys(fields).some(key=>fields[key]!==current?.[key])) {
+          if(!await changeEditorial('save',id,fields,false))throw Error('Guardamos el borrador. Actualiza el plan antes de publicar.');
+          const saved=arr(editorialDesk.data?.plan).find(row=>row.id===id)?.article;
+          if(Object.keys(fields).some(key=>fields[key]!==saved?.[key]))throw Error('El borrador guardado difiere de esta edición. Revisa la versión actual antes de publicar.');
+        }
+        await changeEditorial('publish',id);
+      }else await changeEditorial('save',id,fields);
+    }else if(f.id==='conversation-form'){
       const result=$('#conversation-result');result.innerHTML='<p class="fine">Analizando el ejemplo…</p>';try{const data=await api('/api/demo/conversacion','POST',{channel:val('channel'),text:val('text')});showConversationResult(result,data)}catch(ex){result.innerHTML='<p class="error">No se pudo analizar el ejemplo: '+esc(ex.message)+'</p>'}
     }else if(f.classList.contains('assign-form')){
       if(state.mode==='demo'){const a=state.citas.appointments.find(x=>x.id===f.dataset.id),slot=state.citas.slots.find(x=>x.id===val('slotId')&&x.status==='available');if(!slot)throw Error('El horario ya no está disponible.');Object.assign(a,{slotId:slot.id,startAt:slot.startAt,endAt:slot.endAt,advisor:slot.advisor,status:'booked'});slot.status='booked';render();notify('Horario confirmado en la demostración.')}else{await api('/api/staff/citas/'+encodeURIComponent(f.dataset.id),'POST',{action:'assign',slotId:val('slotId')});await loadCitas();notify('Horario confirmado.')}
@@ -470,12 +831,15 @@ document.addEventListener('submit',async e=>{
       else{await api('/api/staff/leads/'+encodeURIComponent(f.dataset.id),'POST',patch);await load()}
       await openLead(f.dataset.id);notify('Seguimiento guardado.')
     }else if(f.id==='article-form')await changeArticle(f.dataset.id,'publish',{title:val('title'),summary:val('summary'),body:val('body')})
-  }catch(ex){errorFor(f,ex)}finally{button.disabled=false}
+  }catch(ex){
+    if(f.id.startsWith('editorial-')&&err){err.textContent=ex.message+(f.id==='editorial-copy-form'&&ex.status===409?' Tu edición sigue disponible en este formulario.':'');}
+    else errorFor(f,ex);
+  }finally{button.disabled=false}
 })
 let debounce
 document.addEventListener('input',e=>{if(e.target.id==='lead-search'){state.query=e.target.value;state.offset=0;state.searchSeq++;clearTimeout(debounce);debounce=setTimeout(searchLeads,240)}})
 document.addEventListener('change',e=>{if(e.target.id==='stage-filter'){state.stage=e.target.value;state.offset=0;clearTimeout(debounce);searchLeads()}})
-window.addEventListener('hashchange',()=>{hideMenu();closePanel();render();if(state.view==='aspirantes'&&['live','demo'].includes(state.mode))searchLeads();window.scrollTo(0,0)})
+window.addEventListener('hashchange',()=>{hideMenu();closePanel();render();loadActiveEditorial();if(state.view==='aspirantes'&&['live','demo'].includes(state.mode))searchLeads();window.scrollTo(0,0)})
 $('#panel').addEventListener('close',()=>{state.detailSeq++;state.currentDetail=null;if(state.lastFocus?.isConnected)state.lastFocus.focus()})
 $('#panel').addEventListener('click',e=>{if(e.target!==$('#panel'))return;const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closePanel()})
 try{state.programTitles=JSON.parse($('#catalog-map')?.textContent||'{}')}catch{}

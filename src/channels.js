@@ -21,12 +21,12 @@ const currentJob = "j.id=? AND j.kind=? AND j.status='processing' AND l.paused=0
 const activeWhatsapp = " AND c.state='granted' AND c.phone=l.phone AND j.phone=l.phone AND NOT EXISTS(SELECT 1 FROM whatsapp_suppressions s WHERE s.phone=l.phone)";
 const singlePhone = ' AND NOT EXISTS(SELECT 1 FROM leads other WHERE other.phone=l.phone AND other.id<>l.id)';
 
-async function recordDispatch(db,provider,job,lead,phone,account,sender,version) {
+async function recordDispatch(db,provider,job,lead,phone,account,sender,version,startsAt) {
   const whatsapp = provider==='whatsapp';
   const joins = whatsapp?' JOIN whatsapp_consents c ON c.lead_id=l.id AND c.phone=j.phone':'';
   const permitted = whatsapp?activeWhatsapp:" AND j.channel='voice' AND l.consent_voice=1 AND NOT EXISTS(SELECT 1 FROM voice_suppressions s WHERE s.phone=?)";
-  const criteria = currentJob+' AND l.phone=?'+permitted+singlePhone;
-  const keys = [job.id,job.kind,lead.phone,...(whatsapp?[]:[phone])];
+  const criteria = currentJob+' AND j.created_at>=? AND l.phone=?'+permitted+singlePhone;
+  const keys = [job.id,job.kind,startsAt,lead.phone,...(whatsapp?[]:[phone])];
   const from = ' FROM '+jobTable(job.channel)+' j JOIN leads l ON l.id=j.lead_id'+joins;
   const statements = [
     select(db,'INSERT INTO channel_dispatches(provider,job_id,phone,account,sender,version) SELECT ?,j.id,?,?,?,?'+from+' WHERE '+criteria+' ON CONFLICT(provider,job_id) DO NOTHING',
@@ -39,10 +39,10 @@ async function recordDispatch(db,provider,job,lead,phone,account,sender,version)
   return !!results[1].results?.length;
 }
 
-export async function submitWhatsapp(env,job,lead) {
+export async function submitWhatsapp(env,job,lead,startsAt='') {
   const phone = job.phone;
   const template = whatsappTemplate(env,job.kind);
-  if(!template || !e164(phone) || !await recordDispatch(env.DB,'whatsapp',job,lead,phone,env.WHATSAPP_BUSINESS_ACCOUNT_ID,env.WHATSAPP_PHONE_NUMBER_ID,''))return null;
+  if(!template || !e164(phone) || !await recordDispatch(env.DB,'whatsapp',job,lead,phone,env.WHATSAPP_BUSINESS_ACCOUNT_ID,env.WHATSAPP_PHONE_NUMBER_ID,'',startsAt))return null;
   const endpoint = 'https://graph.facebook.com/'+env.WHATSAPP_GRAPH_VERSION+'/'+env.WHATSAPP_PHONE_NUMBER_ID+'/messages';
   const body = {
     messaging_product:'whatsapp',recipient_type:'individual',to:phone.slice(1),type:'template',
@@ -55,11 +55,11 @@ export async function submitWhatsapp(env,job,lead) {
   return id;
 }
 
-export async function submitRetell(env,job,lead,program) {
+export async function submitRetell(env,job,lead,program,startsAt='') {
   const phone = channelPhone(lead.phone);
   if(!phone)throw new ServiceError('Revisa el teléfono antes de llamar.',422,422);
   const version = String(env.RETELL_AGENT_VERSION||'latest_published');
-  if(!await recordDispatch(env.DB,'retell',job,lead,phone,env.RETELL_AGENT_ID,env.RETELL_FROM,version))return null;
+  if(!await recordDispatch(env.DB,'retell',job,lead,phone,env.RETELL_AGENT_ID,env.RETELL_FROM,version,startsAt))return null;
   const variables = {institucion:'Universidad Casa Grande'};
   if(program) {
     variables.programa=program.title;

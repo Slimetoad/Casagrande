@@ -366,3 +366,36 @@ test('Resend conserva recibos de expedientes cerrados y matriculados sin reabrir
     assert.equal(db.prepare("SELECT COUNT(*) n FROM events WHERE type='correo recibido'").get().n,1);
   }
 });
+
+test('el inicio de activación excluye trabajos anteriores de correo y WhatsApp aunque hayan vencido',async t=>{
+  const reference=Date.now();
+  const before=new Date(reference-7200000).toISOString(),start=new Date(reference-3600000).toISOString(),due=new Date(reference-60000).toISOString();
+  const env={...whatsappEnv(database()),RESEND_API_KEY:'resend-local',RESEND_FROM:'prueba@example.org',
+    WHATSAPP_TEMPLATE_GUIDANCE:'seguimiento_ucg',OUTREACH_START_AT:'2026-02-30T10:00:00Z'};
+  addLead(env.DB);
+  const db=env.DB.raw;
+  db.prepare("UPDATE jobs SET created_at=?,due_at=?,updated_at=? WHERE id='j1'").run(before,due,due);
+  db.prepare("INSERT INTO jobs(id,lead_id,channel,kind,status,due_at,created_at,updated_at) VALUES('nuevo-correo','l1','email','guidance','pending',?,?,?)").run(due,start,due);
+  db.prepare("INSERT INTO whatsapp_consents VALUES('l1',?,'granted','portal','test',?,?)").run(phone,before,before);
+  const wa=db.prepare("INSERT INTO whatsapp_jobs(id,lead_id,phone,kind,status,due_at,created_at,updated_at) VALUES(?,'l1',?,?,'pending',?,?,?)");
+  wa.run('anterior-wa',phone,'welcome',due,before,due);
+  wa.run('nuevo-wa',phone,'guidance',due,start,due);
+  const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{
+    if(url.includes('resend.com')){
+      sent.push(opts.headers['Idempotency-Key']);
+      return Response.json({id:'test-resend'});
+    }
+    sent.push(JSON.parse(opts.body).biz_opaque_callback_data);
+    return Response.json({messages:[{id:'wamid.test'}]});
+  });
+  assert.equal((await runDueJobs(env,programs)).status,'sin_configurar');
+  assert.deepEqual(sent,[]);
+  env.OUTREACH_START_AT=start;
+  assert.equal((await runDueJobs(env,programs)).accepted,2);
+  assert.deepEqual(sent.sort(),['admisiones-nuevo-correo','posgrados-ucg:nuevo-wa']);
+  const archived=db.prepare("SELECT status,attempts FROM jobs WHERE id='j1' UNION ALL SELECT status,attempts FROM whatsapp_jobs WHERE id='anterior-wa'").all();
+  assert.ok(archived.every(row=>row.status==='pending' && row.attempts===0));
+  await runDueJobs(env,programs);
+  assert.equal(sent.length,2);
+});

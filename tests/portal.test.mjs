@@ -60,18 +60,21 @@ test('una solicitud optativa llega al CRM y el asistente solo prepara asesoría 
   const chat=await (await invoke(env,'/api/chat','POST',{message:'¿Cuál es la modalidad?',program:programs[0].slug})).json()
   assert.equal(chat.mode,'catalogo');assert.ok(chat.answer)
 })
-test('las métricas se agregan y la ejecución del programador respeta la configuración',async()=>{
+test('las métricas se agregan y el mantenimiento general conserva el historial en modo lectura',async()=>{
   const env=envFor(), h={'X-UCG-Mantenimiento':env.MAINTENANCE_TOKEN}
   assert.equal((await invoke(env,'/api/maintenance','POST',{})).status,403)
   assert.equal((await invoke(env,'/api/analytics','POST',{event:'quiz_complete',source:'directo'})).status,204)
   const rows=(await (await invoke(env,'/api/staff/analytics','GET',undefined,staff)).json()).rows
   assert.equal(rows[0].total,1)
-  const jobs=await (await invoke(env,'/api/maintenance','POST',{},h)).json()
-  assert.ok(jobs.procesos.every(x=>['sin_configurar','en_pausa','completado'].includes(x.estado)),JSON.stringify(jobs))
-  const repeat=await (await invoke(env,'/api/maintenance','POST',{},h)).json()
-  assert.ok(repeat.procesos.every(x=>x.estado==='ya_procesado'))
+  const previous=await invoke(env,'/api/maintenance','POST',{},h)
+  assert.equal(previous.status,410)
+  assert.deepEqual((await previous.json()).rutas,['/api/maintenance/editorial','/api/maintenance/nuevos'])
+  assert.equal((await invoke(env,'/api/maintenance/nuevos','POST',{},h)).status,409)
+  assert.equal((await invoke(env,'/api/maintenance/editorial','GET')).status,403)
+  const scoped=await (await invoke(env,'/api/maintenance/editorial','GET',undefined,h)).json()
+  assert.deepEqual(scoped,{ambito:'editorial',ejecuciones:[]})
   const log=await (await invoke(env,'/api/maintenance','GET',undefined,h)).json()
-  assert.equal(log.ejecuciones.length,4)
+  assert.equal(log.ejecuciones.length,0)
 })
 
 test('la medición de fichas respeta GPC y DNT y el tablero de conversión requiere identidad',async()=>{
@@ -114,12 +117,13 @@ test('la sonda técnica de correo requiere acceso de servicio y solo escribe su 
   const headers={'X-UCG-Mantenimiento':env.MAINTENANCE_TOKEN};
   const originalFetch=globalThis.fetch;
   t.after(()=>{globalThis.fetch=originalFetch});
-  let requestBody;
+  let requestBody,readBlocked=true;
   globalThis.fetch=async(url,options)=>{
     if(options?.method==='POST'){
       requestBody=JSON.parse(options.body);assert.deepEqual(requestBody.to,['posgrados+prueba@example.org']);
       return Response.json({id:crypto.randomUUID()});
     }
+    if(readBlocked)return Response.json({name:'restricted_api_key',message:'detalle privado del proveedor'},{status:401});
     return Response.json({id:url.split('/').at(-1),text:requestBody.text,subject:requestBody.subject});
   };
   const check=await invoke(env,'/api/maintenance/correo/prueba','POST',{},headers);assert.equal(check.status,201);
@@ -128,9 +132,72 @@ test('la sonda técnica de correo requiere acceso de servicio y solo escribe su 
   const {recordMailLoopback}=await import('../src/mail-loopback.js');
   assert.equal(await recordMailLoopback(env,{type:'email.received',data:{to:['ajeno@example.org']}}),false);
   const data={to:requestBody.to,subject:requestBody.subject,from:requestBody.from,email_id:crypto.randomUUID()};
+  await assert.rejects(()=>recordMailLoopback(env,{type:'email.received',data}),/lectura de la sonda/);
+  const pending=await (await invoke(env,'/api/maintenance/correo/prueba','GET',undefined,headers)).json();
+  assert.equal(pending.probe.accepted,true);
+  assert.equal(pending.probe.read,false);
+  assert.equal(pending.probe.issue.phase,'lectura');
+  assert.equal(pending.probe.issue.httpStatus,401);
+  assert.equal(pending.probe.issue.code,'restricted_api_key');
+  readBlocked=false;
   assert.equal(await recordMailLoopback(env,{type:'email.received',data}),true);
   assert.equal(await recordMailLoopback(env,{type:'email.received',data}),true);
   const state=await (await invoke(env,'/api/maintenance/correo/prueba','GET',undefined,headers)).json();
   assert.equal(state.probe.state,'verificada');assert.ok(state.probe.receivedAt);
   assert.equal(env.DB.prepare('SELECT COUNT(*) n FROM leads').first().n,0);
 });
+
+test('el diagnóstico Resend conserva solo la fase, el código permitido y el estado HTTP',async t=>{
+  const config={RESEND_FROM:'Orientación <posgrados@example.org>',RESEND_ADMISSIONS_INBOUND_ADDRESS:'posgrados@example.org',RESEND_API_KEY:'test-service',RESEND_WEBHOOK_SECRET:'whsec_simulado'};
+  const hint='Detalle con datos privados de proveedor y un secreto de prueba';
+  let response=()=>Response.json({name:'restricted_api_key',message:hint},{status:401});
+  t.mock.method(globalThis,'fetch',async url=>{
+    assert.equal(url,'https://api.resend.com/emails')
+    return response()
+  });
+  for(const expected of [
+    {code:'restricted_api_key',httpStatus:401},
+    {code:'http_error',httpStatus:502},
+    {code:'transport_error',httpStatus:null},
+    {code:'invalid_response',httpStatus:200}
+  ]){
+    const env={...envFor(),...config},headers={'X-UCG-Mantenimiento':env.MAINTENANCE_TOKEN};
+    if(expected.code==='http_error')response=()=>Response.json({name:hint,message:hint},{status:502});
+    if(expected.code==='transport_error')response=()=>{throw new Error(hint)};
+    if(expected.code==='invalid_response')response=()=>Response.json({message:hint});
+    const failure=await invoke(env,'/api/maintenance/correo/prueba','POST',{},headers)
+    assert.equal(failure.status,502)
+    const detail=await failure.json(),saved=await (await invoke(env,'/api/maintenance/correo/prueba','GET',undefined,headers)).json();
+    assert.deepEqual(detail.probe,saved.probe)
+    assert.equal(saved.probe.state,'por_conciliar')
+    assert.equal(saved.probe.issue.phase,'envio')
+    assert.equal(saved.probe.issue.httpStatus,expected.httpStatus)
+    assert.equal(saved.probe.issue.code,expected.code)
+    const metrics=env.DB.prepare("SELECT result FROM background_runs WHERE kind='sonda_correo'").first();
+    assert.deepEqual(JSON.parse(metrics.result),{phase:'envio',...expected})
+    const page=(await invoke(env,'/equipo/conexiones','GET',undefined,staff))
+    assert.equal(page.status,200)
+    const rendered=await page.text();
+    assert.ok(rendered.includes(expected.code))
+    assert.ok(!rendered.includes(hint))
+    assert.ok(!JSON.stringify(detail).includes(hint))
+  }
+})
+
+test('el plan editorial público contiene mediciones de Ecuador y protege los datos de la cuenta institucional',async()=>{
+  const env=envFor()
+  const response=await invoke(env,'/api/editorial/publico')
+  assert.equal(response.status,200)
+  const board=await response.json()
+  assert.equal(board.programCount,programs.length)
+  assert.equal(board.plan.length,programs.length)
+  assert.equal(board.marketResearch.length,17)
+  assert.ok(board.marketResearch.some(r=>r.program===null))
+  assert.ok(board.marketResearch.some(r=>r.keyword==='maestría en inteligencia artificial' && r.volume===720))
+  assert.ok(board.sources.every(r=>['Catálogo institucional UCG','OpenSEO · Keyword Generator'].includes(r.label)))
+  assert.ok(board.plan.every(r=>!r.evidence.search || r.evidence.search.source==='OpenSEO · Keyword Generator'))
+  for(const path of ['/api/staff/editorial','/api/staff/editorial/rendimiento','/api/staff/openseo']) {
+    assert.equal((await invoke(env,path)).status,403)
+    assert.equal((await invoke(env,path,'GET',undefined,staff)).status,200)
+  }
+})

@@ -1,5 +1,5 @@
 import {brand,programs as catalog} from './catalog.js';
-import {all, digest, enabled, mailReady, now, publicOrigin, requestRemote, select, ServiceError} from './providers.js';
+import {all, digest, enabled, mailReady, now, outreachStartAt, publicOrigin, requestRemote, select, ServiceError} from './providers.js';
 import {recruitmentReplyTo} from './replies.js';
 import {leadConfirmationUrl} from './lead-confirmation.js';
 
@@ -223,7 +223,7 @@ export async function recordNurtureSignal(env,signal) {
 const eligibleJob=`FROM ${jobTable} j JOIN ${intakeTable} s ON s.id=j.signal_id
   JOIN leads l ON l.id=j.lead_id
   WHERE j.id=? AND j.status='processing' AND l.stage=s.stage AND l.program=s.lead_program AND l.paused=0
-  AND l.stage NOT IN ('Cerrado','Matriculado') AND s.received_at>=?
+  AND l.stage NOT IN ('Cerrado','Matriculado') AND s.received_at>=? AND s.recorded_at>=?
   AND (l.consent_email=1 OR (s.transactional=1 AND s.channel='email' AND l.revision=s.lead_revision AND EXISTS(
     SELECT 1 FROM admissions_conversations c WHERE c.id=s.id AND c.lead_id=l.id AND c.provider='resend'
       AND c.direction='inbound' AND c.content_status='complete' AND c.trusted_direct=1 AND c.created_lead=1
@@ -236,9 +236,9 @@ const eligibleJob=`FROM ${jobTable} j JOIN ${intakeTable} s ON s.id=j.signal_id
   AND NOT EXISTS(SELECT 1 FROM admissions_replies r WHERE r.lead_id=l.id AND r.body_status='pendiente' AND r.received_at>s.recorded_at)
   AND NOT EXISTS(SELECT 1 FROM ${jobTable} other WHERE other.lead_id=l.id AND other.id<>j.id AND
     (other.status IN ('processing','uncertain') OR (other.provider_id IS NOT NULL AND other.updated_at>=?)))`;
-async function dispatchable(db,id,date) {
+async function dispatchable(db,id,date,startsAt) {
   return select(db,`SELECT l.id,l.email,l.pref_token,s.intent,s.program,s.transactional,s.stage,s.received_at `+eligibleJob,
-    id,dateBefore(date,maxSignalAge),dateBefore(date,cooldown)).first();
+    id,dateBefore(date,maxSignalAge),startsAt,dateBefore(date,cooldown)).first();
 }
 function emailPayload(env,job,lead,draft,replyTo,confirmation) {
   const pref=new URL('/preferencias/'+encodeURIComponent(lead.pref_token),env.PUBLIC_BASE_URL);
@@ -284,6 +284,8 @@ export async function runNurtureJobs(env,programs=catalog) {
   const counts={accepted:0,skipped:0,retry:0,review:0};
   if(!env.DB || !mailReady(env))return {status:'sin_configurar',...counts};
   if(!enabled(env.OUTREACH_ENABLED))return {status:'en_pausa',...counts};
+  const startsAt=outreachStartAt(env);
+  if(startsAt===null)return {status:'sin_configurar',message:'Usa una fecha de inicio con hora y zona horaria en OUTREACH_START_AT.',...counts};
   const db=env.DB,date=now();
   let due;
   try {
@@ -294,7 +296,9 @@ export async function runNurtureJobs(env,programs=catalog) {
       counts.review+=result.meta?.changes||0;
     }
     const limit=Math.max(1,Math.min(3,Number.parseInt(env.OUTREACH_BATCH_SIZE,10)||3));
-    due=await all(db,`SELECT id FROM ${jobTable} WHERE status='pending' AND due_at<=? AND attempts<2 ORDER BY due_at,id LIMIT ?`,date,limit);
+    // The signal and its job are created together. Retrying changes only the job's due/update times.
+    due=await all(db,`SELECT j.id FROM ${jobTable} j JOIN ${intakeTable} s ON s.id=j.signal_id
+      WHERE j.status='pending' AND j.due_at<=? AND j.attempts<2 AND s.recorded_at>=? ORDER BY j.due_at,j.id LIMIT ?`,date,startsAt,limit);
   }catch(error) {
     if(isMissingStorage(error))return {status:'sin_configurar',...counts};
     throw error;
@@ -302,13 +306,14 @@ export async function runNurtureJobs(env,programs=catalog) {
   await Promise.all(due.map(async job=>{
     const started=now();
     const claimed=await select(db,`UPDATE ${jobTable} SET status='processing',updated_at=?,attempts=attempts+1
-      WHERE id=? AND status='pending' AND due_at<=? AND attempts<2 RETURNING attempts`,started,job.id,started).first();
+      WHERE id=? AND status='pending' AND due_at<=? AND attempts<2 AND EXISTS(
+        SELECT 1 FROM ${intakeTable} s WHERE s.id=${jobTable}.signal_id AND s.recorded_at>=?) RETURNING attempts`,started,job.id,started,startsAt).first();
     if(!claimed)return;
     const skipped=() => statusWrite(db,job.id,'skipped',
       'Se canceló la respuesta automática al volver a comprobar la conversación, la etapa y el permiso.',now());
     let before,draft,replyTo,confirmation,providerId;
     try {
-      before=await dispatchable(db,job.id,started);
+      before=await dispatchable(db,job.id,started,startsAt);
       const program=before && programs.find(item=>item.slug===before.program);
       if(!before || (before.program && !program)) {
         await skipped();counts.skipped++;return;
@@ -316,7 +321,7 @@ export async function runNurtureJobs(env,programs=catalog) {
       draft=makeDraft(before.intent,program,before.stage,publicOrigin(env),env.INSTITUTIONAL_LIVE==='true');
       replyTo=await recruitmentReplyTo(env,before)||env.RESEND_REPLY_TO;
       confirmation=before.transactional?await leadConfirmationUrl(publicOrigin(env),before,before.received_at):'';
-      const current=await dispatchable(db,job.id,now());
+      const current=await dispatchable(db,job.id,now(),startsAt);
       if(!current || current.email!==before.email || current.pref_token!==before.pref_token) {
         await skipped();counts.skipped++;return;
       }

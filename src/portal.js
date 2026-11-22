@@ -15,7 +15,13 @@ import { handleAdvisor } from './advisor.js'
 import { handleAdmissions } from './admissions.js'
 import { handleIntegrations, publicArticles } from './integrations.js'
 import { handleMetrics, json, allowPublicAction, secretMatches } from './observability.js'
-import { handleMaintenance } from './maintenance.js'
+import { handleMaintenance, handleScopedMaintenance } from './maintenance.js'
+import { handleEditorial, publicEditorial } from './editorial-engine.js'
+import { readOpenSeoMetrics } from './openseo.js'
+import { publicKeywordObservations } from './openseo-observations.js'
+import { institutionalUrl } from './editorial-draft.js'
+import { tableExists } from './workspace.js'
+import { collectArticle, articlePerformance } from './article-performance.js'
 
 const escape = s=>String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const staffPaths = new Set(['/equipo','/equipo/manual','/equipo/conversion','/equipo/verificacion','/equipo/conexiones'])
@@ -47,6 +53,16 @@ function secured(response,privateSite=true) {
   if (privateSite) headers.set('X-Robots-Tag','noindex, nofollow')
   return new Response(response.body,{status:response.status,headers})
 }
+async function officialGuides(db,slug=null) {
+  if(!db || !await tableExists(db,'seo_editorial_cms')) return new Map()
+  const query=db.prepare(`SELECT a.slug,c.official_url FROM seo_editorial_cms c
+    JOIN seo_editorial_plan p ON p.id=c.plan_id AND p.published_revision=c.version
+    JOIN seo_articles a ON a.opportunity_id='editorial:'||p.id
+    WHERE a.status='published' AND c.status='published' AND c.receipt_id IS NOT NULL
+    AND (? IS NULL OR a.slug=?)`)
+  const {results}=await query.bind(slug,slug).all()
+  return new Map(results.map(r=>[r.slug,institutionalUrl(r.official_url)]).filter(([,url])=>url))
+}
 async function route(request,env,url,manual,onLeadCreated) {
   const path = url.pathname.replace(/\/+$/,'') || '/'
   const method = request.method
@@ -57,6 +73,7 @@ async function route(request,env,url,manual,onLeadCreated) {
     return new Response(null,{status:res.status,headers:res.headers})
   }
   if (path === '/api/maintenance/correo/prueba') return handleMailCheck(request,env)
+  if (['/api/maintenance/editorial','/api/maintenance/nuevos'].includes(path)) return handleScopedMaintenance(request,env,programs,path.split('/').at(-1))
   if (path === '/api/maintenance') return handleMaintenance(request,env,programs)
   if (!['GET','HEAD'].includes(method)) {
     const from = request.headers.get('origin')
@@ -69,8 +86,8 @@ async function route(request,env,url,manual,onLeadCreated) {
     return new Response(indexable ? `User-agent: *\nAllow: /\nDisallow: /equipo\nDisallow: /crm\nDisallow: /motor-de-contenidos\nDisallow: /api/\nDisallow: /preferencias/\nDisallow: /confirmar/\nSitemap: ${origin}/sitemap.xml\n` : 'User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}})
   }
   if (path === '/sitemap.xml') {
-    const articles = await publicArticles(env)
-    const urls = [...publicPages,...programs.map(p=>'/programas/'+p.slug),...(articles||[]).map(p=>'/guias/'+p.slug)]
+    const [articles,official]=await Promise.all([publicArticles(env),officialGuides(env.DB)])
+    const urls = [...publicPages,...programs.map(p=>'/programas/'+p.slug),...(articles||[]).filter(p=>!official.has(p.slug)).map(p=>'/guias/'+p.slug)]
     return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(p=>`<url><loc>${escape(origin+p)}</loc></url>`).join('')}</urlset>`,{headers:{'Content-Type':'application/xml; charset=utf-8'}})
   }
   if(path==='/api/demo/conversacion')return demoConversation(request,programs,origin)
@@ -78,10 +95,27 @@ async function route(request,env,url,manual,onLeadCreated) {
   const operator = isStaff ? await resolveOperator(request,env) : null
   if (path.startsWith('/api/staff/') && !operator) return json({error:'Esta sección requiere acceso del equipo de admisiones.'},403)
   if (path.startsWith('/api/') || path.startsWith('/preferencias/')) {
-    if (method === 'POST' && ['/api/chat','/api/leads','/api/analytics','/api/hubs','/api/citas/solicitar','/api/citas/gestionar'].includes(path)) {
-      const limit = ['/api/analytics','/api/hubs'].includes(path)?400:path === '/api/chat'?35:path.startsWith('/api/citas/')?30:120
+    if (path==='/api/editorial/publico' && method==='GET') {
+      const overview=await publicEditorial(env,programs)
+      const publicSources=new Set(['Catálogo institucional UCG','OpenSEO · Keyword Generator'])
+      const sources=overview.sources.filter(row=>publicSources.has(row.label))
+      const plan=overview.plan.map(row=>({...row,evidence:{
+        search:row.evidence?.search?.source==='OpenSEO · Keyword Generator'?row.evidence.search:null
+      }}))
+      return json({...overview,plan,sources,marketResearch:publicKeywordObservations})
+    }
+    if (path==='/api/staff/editorial/rendimiento' && method==='GET') return json(await articlePerformance(env))
+    if (path==='/api/staff/openseo' && method==='GET') {
+      const slug=url.searchParams.get('programa') || undefined
+      if(slug && !programs.some(p=>p.slug===slug)) return json({error:'Programa desconocido.'},404)
+      return json(await readOpenSeoMetrics(env.DB,slug,{programs,configured:!!(env.OPENSEO_API_KEY||env.OPENSEO_ACCESS_TOKEN)}))
+    }
+    if (method === 'POST' && ['/api/editorial/medir','/api/chat','/api/leads','/api/analytics','/api/hubs','/api/citas/solicitar','/api/citas/gestionar'].includes(path)) {
+      const limit = ['/api/analytics','/api/hubs','/api/editorial/medir'].includes(path)?400:path === '/api/chat'?35:path.startsWith('/api/citas/')?30:120
       if (!await allowPublicAction(request,env,path,limit)) return json({error:'Has realizado varias solicitudes. Inténtalo más tarde.'},429)
     }
+    if(path==='/api/editorial/medir' && method==='POST') return collectArticle(request,env)
+    if(path==='/api/staff/editorial') return handleEditorial(request,env,url,programs,operator)
     if(path==='/api/hubs')return collectHub(request,env,programs)
     const next = await handleConversations(request,env,url,programs,operator) || await handleNurture(request,env,url,programs,operator) || await handleAppointments(request,env,url,programs,operator) || await handleIntelligence(request,env,url,programs,operator)
     if(next)return next
@@ -103,12 +137,13 @@ async function route(request,env,url,manual,onLeadCreated) {
   let articles = []
   if (guidesPage) {
     const items = path === '/guias' ? await publicArticles(env) : [await publicArticles(env,path.slice(7))]
-    articles = items.filter(Boolean).map(a=>({...a,description:a.summary,published_at:a.publishedAt}))
+    const official=path==='/guias'?new Map():await officialGuides(env.DB,path.slice(7))
+    articles = items.filter(Boolean).map(a=>({...a,description:a.summary,published_at:a.publishedAt,officialUrl:official.get(a.slug)}))
   }
   const guide = path.startsWith('/guias/') && articles.some(a=>'/guias/'+a.slug===path)
   if (!publicPages.has(path) && !program && !guide) return notice('Esta página no está disponible','Puedes explorar la oferta de posgrados o volver a orientación.','/programas','Explorar maestrías',404)
   const page = renderStudent(path+url.search,programs,{origin,indexable,articles,institutionalLive:env.INSTITUTIONAL_LIVE==='true',appointmentHtml:path==='/cita'?appointmentForm(programs,url.searchParams.get('programa'),env.INSTITUTIONAL_LIVE!=='true'):'',query:url.searchParams,searchParams:url.searchParams})
-  return html(page.replace('</body>','<script defer src="/embudo.js"></script></body>'))
+  return html(page.replace('</body>','<script defer src="/embudo.js"></script>'+(guide?'<script defer src="/articulos.js"></script>':'')+'</body>'))
 }
 export async function serve(request,env,manual,onLeadCreated) {
   const url = new URL(request.url)

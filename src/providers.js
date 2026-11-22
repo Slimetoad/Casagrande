@@ -37,6 +37,15 @@ export const semrushReady=env=>!!(env.SEMRUSH_API_KEY && env.SEMRUSH_DOMAIN && e
 export const mailReady=env=>!!(env.RESEND_API_KEY && env.RESEND_FROM && publicOrigin(env));
 export const voiceReady=env=>!!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM && publicOrigin(env));
 export const enabled=v=>String(v).toLowerCase()==='true';
+export function outreachStartAt(env) {
+  const value=env.OUTREACH_START_AT;
+  if(value===undefined || value===null || value==='')return '';
+  const input=typeof value==='string'?value.trim():'';
+  const date=input.match(/^([1-9]\d{3})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/);
+  if(!date || new Date(Date.UTC(+date[1],+date[2]-1,+date[3])).toISOString().slice(0,10)!==input.slice(0,10))return null;
+  const instant=Date.parse(input);
+  return Number.isFinite(instant)?new Date(instant).toISOString():null;
+}
 export const e164=value=>typeof value==='string' && /^\+[1-9]\d{7,14}$/.test(value);
 export function channelPhone(value) {
   const number=String(value||'').trim();
@@ -62,7 +71,7 @@ export function configRows(env) {
     return {key,label,configured:!!ok,status:!ok?'Pendiente de configuración':paused?'Preparado · envío pausado':'Configurado',detail};
   }
   return [
-    ...Object.entries(aiProviders).map(([key,p])=>row(key,p.label,env[p.key] && env[p.model],activeAI(env)===key?'Proveedor seleccionado para orientación y borradores.':'Requiere una clave y un identificador de modelo disponible en la cuenta.')),
+    ...Object.entries(aiProviders).map(([key,p])=>row(key,p.label,env[p.key] && env[p.model],activeAI(env)===key?'Modelo activo para orientación y borradores: '+env[p.model]+'.':'Requiere una clave y un identificador de modelo disponible en la cuenta.')),
     row('resend','Resend',mailReady(env),'Correo de seguimiento con remitente verificado y enlace de preferencias.',!enabled(env.OUTREACH_ENABLED)),
     row('twilio','Twilio Voice',voiceReady(env),selectedVoice(env)==='twilio'?'Voz interactiva con consentimiento y horario de Guayaquil.':'Selecciona Twilio como proveedor de voz para activar las llamadas.',!enabled(env.OUTREACH_ENABLED)||selectedVoice(env)!=='twilio'),
     row('whatsapp','WhatsApp Cloud API',whatsappReady(env),'Registra el webhook de Meta y aprueba en español las plantillas de etapas que quieras enviar.',!enabled(env.OUTREACH_ENABLED)||!enabled(env.OUTREACH_WHATSAPP_ENABLED)),
@@ -80,6 +89,10 @@ export async function aiText(env,system,user,maxTokens=600) {
     endpoint='https://api.anthropic.com/v1/messages';
     headers['x-api-key']=secret;headers['anthropic-version']='2023-06-01';
     body={model,max_tokens:maxTokens,system,messages:[{role:'user',content:user}]};
+    if (model==='claude-haiku-5-5') {
+      body.max_tokens=Math.min(8192,maxTokens+640);
+      body.output_config={effort:maxTokens>=1400?'medium':'low'};
+    }
   } else if(vendor==='google'){
     endpoint='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent';
     headers['x-goog-api-key']=secret;
@@ -91,6 +104,8 @@ export async function aiText(env,system,user,maxTokens=600) {
   }
   const res=await requestRemote(endpoint,{method:'POST',headers,body:JSON.stringify(body)},p.label);
   const data=await res.json();
+  if (vendor==='anthropic' && ['refusal','max_tokens','model_context_window_exceeded'].includes(data.stop_reason))
+    throw new ServiceError('La respuesta de Claude no se completó.',502);
   const result=vendor==='anthropic'?data.content?.filter(c=>c.type==='text').map(c=>c.text).join('\n'):
     vendor==='google'?data.candidates?.[0]?.content?.parts?.filter(c=>c.text && !c.thought).map(c=>c.text).join('\n'):
     data.output?.filter(c=>c.type==='message').flatMap(c=>c.content||[]).filter(c=>c.type==='output_text').map(c=>c.text).join('\n');

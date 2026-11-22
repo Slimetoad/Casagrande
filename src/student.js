@@ -16,6 +16,7 @@ const option = (value, label = value) => `<option value="${escape(value)}">${esc
 const imageOf = p => p.image || hero;
 const amount = value => new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
 const safeUrl = value => { try { const u = new URL(value); return u.protocol === "https:" ? u.href : official; } catch { return official; } };
+const institutionalSource = value => { try { const u = new URL(value); return u.protocol === "https:" && !u.username && !u.password && !u.port && (u.hostname === "casagrande.edu.ec" || u.hostname.endsWith(".casagrande.edu.ec")) ? u.href : ""; } catch { return ""; } };
 const icons = {
   compass:'<circle cx="12" cy="12" r="9"/><path d="m16.5 7.5-2.8 6.2-6.2 2.8 2.8-6.2Z"/>',
   chat:'<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.3a2.5 2.5 0 0 1-1-2Z"/><path d="M8 9h8m-8 3h5"/>',
@@ -163,10 +164,10 @@ function platform(ps) {
             </div>
           </div>
           <div class="platform-card-content">
-            ${kicker("Demostración pública")}
-            <h3>Motor de contenidos</h3>
-            <p>Recorre ejemplos de oportunidades de búsqueda y propuestas de contenido que pasan por revisión editorial antes de publicarse.</p>
-            ${link("/motor-de-contenidos","Abrir motor de contenidos","outline","arrow")}
+            ${kicker("Plan público y demostración")}
+            <h3>Plan editorial y guías</h3>
+            <p>Consulta el plan editorial público y las guías disponibles, o prueba una demostración con contenido ficticio.</p>
+            ${link("/motor-de-contenidos","Ver plan editorial","outline","arrow")}
           </div>
         </article>
       </div>
@@ -288,8 +289,20 @@ function guides(items) {
   ];
   return `<section class="wrap">${crumbs([["Guías"]])}<div class="page-intro">${kicker("Recursos para aspirantes")}<h1>Guías de <em>posgrado.</em></h1><p>Herramientas y lecturas para tomar una decisión informada.</p></div><div class="guide-grid">${guideData.map(([i,t,d,u,a])=>`<article class="guide-card">${icon(i,34)}<h2>${t}</h2><p>${d}</p><a class="text-link" href="${u}">${a}</a></article>`).join("")}</div>${items.length ? `<div class="content-section">${heading("Orientación","Lecturas recientes")}<div class="reading-list">${items.map(i=>`<a href="/guias/${encodeURIComponent(i.slug)}"><h3>${escape(i.title)}</h3><p>${escape(i.description)}</p></a>`).join("")}</div></div>` : ""}</section>`;
 }
-function article(i) {
-  return `<section class="wrap">${crumbs([["Guías","/guias"],[i.title]])}<article class="editorial-article">${kicker("Guía de posgrado")}<h1>${escape(i.title)}</h1><p class="article-deck">${escape(i.description)}</p>${String(i.body || "").split(/\n\s*\n/).filter(Boolean).map(x=>`<p>${escape(x)}</p>`).join("")}<div class="program-tools">${link("/solicitar?origen=guia","Conversar con admisiones","primary")}</div></article></section>`;
+function article(i,ps) {
+  const program=ps.find(p=>p.slug===i.program), source=institutionalSource(i.sourceUrl);
+  const body=String(i.body || "").split(/\n\s*\n/).filter(Boolean).map(block=>{
+    const parts=block.split(/\n/), first=parts[0].trim();
+    return parts.length>1 && first.length>0 && first.length<=110
+      ? `<h2>${escape(first)}</h2><p>${escape(parts.slice(1).join(" "))}</p>`
+      : `<p>${escape(block)}</p>`;
+  }).join("");
+  const sourceLink=source?`<p class="fine">Fuente: <a href="${escape(source)}" rel="external noreferrer">Ficha institucional del programa</a>. Confirma con Admisiones las condiciones vigentes.</p>`:"";
+  const programLink=program?`<a class="btn btn-outline" href="${escape(urlFor(program))}" data-editorial-cta="programa">Explorar la maestría</a>`:"";
+  const picture=typeof program?.image==="string" && /^\/media\/[a-z0-9-]+\.(?:webp|png|jpg)$/i.test(program.image)?program.image:campus;
+  const published=new Date(i.published_at || i.publishedAt || "");
+  const date=Number.isFinite(published.valueOf())?`<time datetime="${escape(published.toISOString())}">${escape(new Intl.DateTimeFormat("es-EC",{day:"numeric",month:"long",year:"numeric",timeZone:"UTC"}).format(published))}</time>`:"";
+  return `<section class="wrap">${crumbs([["Guías","/guias"],[i.title]])}<article class="editorial-article" data-editorial-article="${escape(i.slug)}"><header class="article-hero"><div class="article-hero-copy">${kicker("Guía de posgrado")}<h1>${escape(i.title)}</h1><p class="article-deck">${escape(i.description)}</p>${date?`<p class="article-date">Publicado el ${date}</p>`:""}</div><figure class="article-hero-image"><img src="${escape(picture)}" alt="" width="575" height="650" fetchpriority="high">${program?`<figcaption>${escape(program.shortTitle || program.title)}</figcaption>`:""}</figure></header><div class="article-reading">${body}${sourceLink}<div class="program-tools">${programLink}<a class="btn btn-primary" href="${escape(enquiry(program?.slug || "","guia"))}" data-editorial-cta="solicitar">Conversar con admisiones</a></div></div></article></section>`;
 }
 function notFound() { return `<section class="wrap empty-box"><h1>No encontramos esta página.</h1><p>Explora las maestrías disponibles o pide orientación a admisiones.</p>${link("/programas","Ver las maestrías","primary")}</section>`; }
 export function renderStudent(path, programs, options={}) {
@@ -302,16 +315,17 @@ export function renderStudent(path, programs, options={}) {
   const p = parts[0]==="programas" && parts.length===2 ? ps.find(i=>i.slug===parts[1]) : null;
   const a = parts[0]==="guias" && parts.length===2 ? (options.articles||[]).find(i=>i.slug===parts[1]) : null;
   if (pathname === "/cita" && typeof options.appointmentHtml === "string") pages["/cita"] = ["Agendar una cita de posgrados", "Elige un horario para conversar con admisiones de Universidad Casa Grande.", () => options.appointmentHtml];
-  const entry = p ? [p.title, p.summary || "Explora el programa de posgrado y recibe orientación de admisiones.", ()=>program(p,ps)] : a ? [a.title, a.description, ()=>article(a)] : pages[pathname];
+  const entry = p ? [p.title, p.summary || "Explora el programa de posgrado y recibe orientación de admisiones.", ()=>program(p,ps)] : a ? [a.title, a.description, ()=>article(a,ps)] : pages[pathname];
   const [title,desc,content] = entry || ["Página no encontrada","Explora la oferta de posgrados de UCG.",notFound];
   let origin = ""; try { if (options.origin && ["http:","https:"].includes(new URL(options.origin).protocol)) origin = new URL(options.origin).origin; } catch {}
-  const canonical = origin ? origin + pathname : "";
+  const canonical = (a && institutionalSource(a.officialUrl)) || (origin ? origin + pathname : "");
+  const linkedProgram = p || (a && ps.find(item=>item.slug===a.program));
+  const pageImage = linkedProgram ? imageOf(linkedProgram) : pathname === "/plataforma" ? campus : hero;
   const org = {"@type":"CollegeOrUniversity","name":"Universidad Casa Grande","url":"https://www.casagrande.edu.ec/"};
   const schema = [{"@context":"https://schema.org","@type":"WebPage","name":title,"description":desc,"inLanguage":"es-EC",...(canonical?{url:canonical}:{})}];
   if(p) schema.push({"@context":"https://schema.org","@type":"Course","name":p.title,"description":desc,"provider":org,"inLanguage":"es",...(canonical?{url:canonical}:{}),sameAs:safeUrl(p.url)});
-  if(a) schema.push({"@context":"https://schema.org","@type":"Article",headline:a.title,description:desc, ...(a.published_at?{datePublished:a.published_at}:{})});
+  if(a) schema.push({"@context":"https://schema.org","@type":"Article",headline:a.title,description:desc,inLanguage:"es-EC",publisher:(options.institutionalLive || a.officialUrl)?org:{"@type":"Organization",name:"Portal piloto de orientación de posgrados",url:origin},...(origin?{image:origin+pageImage}:{}),...(canonical?{mainEntityOfPage:canonical}:{}),...(a.published_at?{datePublished:a.published_at}:{}),...(a.updatedAt?{dateModified:a.updatedAt}:{}),...(institutionalSource(a.sourceUrl)?{citation:institutionalSource(a.sourceUrl)}:{})});
   if (origin && parts.length) { const intermediate = parts.length===2 ? [{"@type":"ListItem",position:2,name:p?"Maestrías":"Guías",item:origin+"/"+parts[0]}] : []; schema.push({"@context":"https://schema.org","@type":"BreadcrumbList",itemListElement:[{"@type":"ListItem",position:1,name:"Posgrados",item:origin+"/"},...intermediate,{"@type":"ListItem",position:intermediate.length+2,name:title,item:canonical}]}); }
-  const pageImage = p ? imageOf(p) : pathname === "/plataforma" ? campus : hero;
   const data = ps.map(({slug,title,area,mode,family,duration,price,admissionsStatus})=>({slug,title,area,mode,family,duration,price,admissionsStatus}));
   return `<!doctype html><html lang="es-EC"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f7f3"><meta name="robots" content="${options.indexable && entry ? "index,follow":"noindex,nofollow"}"><title>${escape(title)} | Universidad Casa Grande</title><meta name="description" content="${escape(desc)}">${canonical?`<link rel="canonical" href="${escape(canonical)}"><meta property="og:url" content="${escape(canonical)}">`:""}<meta property="og:type" content="${a?"article":"website"}"><meta property="og:locale" content="es_EC"><meta property="og:site_name" content="Posgrados UCG"><meta property="og:title" content="${escape(title)} | Universidad Casa Grande"><meta property="og:description" content="${escape(desc)}"><meta property="og:image" content="${escape(origin+pageImage)}"><link rel="stylesheet" href="/student.css"><script type="application/ld+json">${json(schema)}</script></head><body class="${p?"page-program":pathname==="/"?"page-home":pathname==="/programas"?"page-catalog":pathname==="/plataforma"?"page-platform":""}">${header(pathname)}<main id="contenido" tabindex="-1">${content()}</main>${footer(options.institutionalLive)}${pathname==="/plataforma"?"":assistantWidget()}<script id="catalog-data" type="application/json">${json(data)}</script><script src="/student-client.js" defer></script></body></html>`;
 }

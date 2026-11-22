@@ -197,3 +197,28 @@ test('la firma de Resend y DMARC pass permiten la primera respuesta de una consu
     JOIN conversation_nurture_jobs j ON j.signal_id=s.id JOIN leads l ON l.id=s.lead_id`).get();
   assert.deepEqual({...one},{transactional:1,status:'accepted',consent_email:0});
 });
+
+test('la activación prospectiva de conversaciones usa el momento de creación y conserva los trabajos anteriores',async t=>{
+  const point=Date.now(),before=new Date(point-3600000).toISOString(),start=new Date(point-1800000).toISOString();
+  const {env,raw,lead,signal,status}=fixture({OUTREACH_START_AT:'2026-11-22T08:30:00'});
+  lead('anterior');
+  lead('nuevo');
+  await signal('anterior','anterior');
+  await signal('nuevo','nuevo');
+  raw.prepare("UPDATE conversation_nurture_signals SET recorded_at=? WHERE id='anterior'").run(before);
+  raw.prepare("UPDATE conversation_nurture_signals SET recorded_at=? WHERE id='nuevo'").run(start);
+  const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    assert.equal(url,'https://api.resend.com/emails');
+    sent.push(...JSON.parse(options.body).to);
+    return Response.json({id:'nurture-test'});
+  });
+  assert.equal((await runNurtureJobs(env,programs)).status,'sin_configurar');
+  assert.deepEqual(sent,[]);
+  env.OUTREACH_START_AT=start;
+  assert.equal((await runNurtureJobs(env,programs)).accepted,1);
+  assert.equal(status('anterior'),'pending');
+  assert.equal(status('nuevo'),'accepted');
+  await runNurtureJobs(env,programs);
+  assert.deepEqual(sent,['nuevo@example.edu']);
+});
