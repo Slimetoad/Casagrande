@@ -68,7 +68,7 @@ function safeSearch(row,program,source) {
   const number=value=>typeof value==='number' && Number.isFinite(value) && value>=0 ? value : null;
   const type=/Search Console/.test(source)?'measured':row.sourceKey==='rank'?'rank':'estimate';
   return {
-    keyword,source,type,sourceKey:row.sourceKey || null,shareable:row.trustedEstimate===true && row.sourceKey==='keyword_generator',
+    keyword,source,type,sourceKey:row.sourceKey || null,shareable:row.trustedEstimate===true && ['keyword_generator','project_snapshot'].includes(row.sourceKey),
     sourceUrl:row.sourceUrl==='https://openseo.so/keyword-generator'?row.sourceUrl:null,
     observedAt:row.observedAt || row.updated_at || null,
     periodStart:row.periodStart || row.period_start || null,periodEnd:row.periodEnd || row.period_end || null,
@@ -187,7 +187,7 @@ function audit(db,plan,marker,action,actor,detail,date) {
     SELECT ?,id,?,?,?,? FROM seo_editorial_plan WHERE id=? AND mutation_id=?`,crypto.randomUUID(),action,actor,detail,date,plan,marker);
 }
 
-async function ensurePlan(db,programs,current,actor='Motor editorial',force=false) {
+export async function ensurePlan(db,programs,current,actor='Motor editorial',force=false) {
   let settings=await first(db,'SELECT * FROM seo_editorial_settings WHERE id=1');
   if (!settings) {
     const [,read]=await db.batch([

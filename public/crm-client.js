@@ -219,6 +219,7 @@ function academicUrl(value) {
 }
 const editorialLink=(url,label,external=false)=>url?'<a class="textbtn small" href="'+esc(url)+'"'+(external?' rel="external noreferrer"':'')+'>'+esc(label)+'</a>':''
 const publicKeywordGenerator = 'OpenSEO · Keyword Generator'
+const publicResearchSource = 'OpenSEO · Estudios de palabras clave'
 const publicKeywordUrl = 'https://openseo.so/keyword-generator'
 const editorialProgram = row => row.programTitle || program(row.program);
 const editorialName = row => row.title || 'Propuesta sin título';
@@ -260,7 +261,7 @@ function editorialRows(rows, team) {
       <div><p class="editorial-program">${esc(editorialProgram(row))}</p><h3>${esc(editorialName(row))}</h3>
       ${facts?`<p class="fine">${esc(facts)}</p>`:''}
       ${team&&row.reason?`<p class="fine">${esc(row.reason)}</p>`:''}
-      ${team||row.evidence?.search?.source===publicKeywordGenerator?editorialEvidence(row.evidence?.search):''}
+      ${team||[publicKeywordGenerator,publicResearchSource].includes(row.evidence?.search?.source)?editorialEvidence(row.evidence?.search):''}
       </div><div class="editorial-row-date">${badge(editorialLabel(row.status),published?'good':'warm')}
       ${row.scheduledAt?`<small>${esc(date(row.scheduledAt,true))} · Guayaquil</small>`:'<small>Sin fecha asignada</small>'}
       ${team&&cms&&published?`<small>${esc(editorialLabel(cms,cmsStatus))}</small>`:''}</div>
@@ -290,13 +291,13 @@ function editorialTotals(metrics) {
   return '<dl class="editorial-totals">'+metrics.map(([label,value])=>'<div><dt>'+esc(label)+'</dt><dd>'+editorialCount(value)+'</dd></div>').join('')+'</dl>'
 }
 function publicMarketResearch(entries, plan) {
-  const rows=arr(entries).filter(row=>row?.market==='Ecuador' && row.source===publicKeywordGenerator && typeof row.keyword==='string');
+  const rows=arr(entries).filter(row=>row?.market==='Ecuador' && [publicKeywordGenerator,publicResearchSource].includes(row.source) && typeof row.keyword==='string');
   if(!rows.length)return '<p class="fine">Aún no hay observaciones públicas de búsqueda disponibles.</p>';
   const names=new Map(plan.map(row=>[row.program,editorialProgram(row)]));
   return `<details class="editorial-market block" open><summary>Investigación pública en Ecuador · ${number(rows.length)} consultas</summary>
     <p class="fine" id="editorial-market-explanation">El volumen estima cuántas veces se busca una consulta al mes en Ecuador. La dificultad estima la competencia para posicionarse. El guion indica un dato no disponible. Un cero es un valor informado por la fuente.</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="Tabla de consultas de Ecuador" aria-describedby="editorial-market-explanation"><table>
-      <caption>Observaciones del generador público de palabras clave de OpenSEO</caption>
+      <caption>Estimaciones de búsqueda de OpenSEO para Ecuador</caption>
       <thead><tr><th scope="col">Consulta</th><th scope="col">Programa</th><th scope="col">Volumen mensual estimado</th><th scope="col">Dificultad estimada</th><th scope="col">Observación y fuente</th></tr></thead>
       <tbody>${rows.map(row=>{
         const title=row.program?names.get(row.program)||program(row.program):'General';

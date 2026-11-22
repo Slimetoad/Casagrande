@@ -191,13 +191,24 @@ test('el plan editorial público contiene mediciones de Ecuador y protege los da
   const board=await response.json()
   assert.equal(board.programCount,programs.length)
   assert.equal(board.plan.length,programs.length)
-  assert.equal(board.marketResearch.length,17)
+  assert.equal(new Set(board.marketResearch.filter(r=>r.program).map(r=>r.program)).size,34)
+  assert.ok(board.marketResearch.some(r=>r.keyword==='maestría en ciberseguridad' && r.volume===320))
   assert.ok(board.marketResearch.some(r=>r.program===null))
   assert.ok(board.marketResearch.some(r=>r.keyword==='maestría en inteligencia artificial' && r.volume===720))
   assert.ok(board.sources.every(r=>['Catálogo institucional UCG','OpenSEO · Keyword Generator'].includes(r.label)))
-  assert.ok(board.plan.every(r=>!r.evidence.search || r.evidence.search.source==='OpenSEO · Keyword Generator'))
+  assert.ok(board.plan.every(r=>!r.evidence.search || ['OpenSEO · Keyword Generator','OpenSEO · Estudios de palabras clave'].includes(r.evidence.search.source)))
   for(const path of ['/api/staff/editorial','/api/staff/editorial/rendimiento','/api/staff/openseo']) {
     assert.equal((await invoke(env,path)).status,403)
     assert.equal((await invoke(env,path,'GET',undefined,staff)).status,200)
   }
+})
+
+test('la importación autenticada de OpenSEO conserva ceros, rechaza otros proyectos y es idempotente',async()=>{
+  const env=envFor(),path='/api/maintenance/openseo/importar'
+  const input={projectId:'604a584a-437b-4faf-befd-ef3757efcb6f',locationCode:2218,languageCode:'es',rows:[{keyword:'maestría en ciberseguridad',searchVolume:320,keywordDifficulty:0,cpc:2}]}
+  const headers={'X-UCG-Mantenimiento':env.MAINTENANCE_TOKEN,'content-length':String(JSON.stringify(input).length)}
+  assert.equal((await invoke(env,path,'POST',input)).status,403)
+  assert.equal((await invoke(env,path,'POST',{...input,projectId:'otro'},headers)).status,422)
+  assert.deepEqual(await (await invoke(env,path,'POST',input,headers)).json(),{rows:1,changed:1})
+  assert.deepEqual(await (await invoke(env,path,'POST',input,headers)).json(),{rows:1,changed:0})
 })

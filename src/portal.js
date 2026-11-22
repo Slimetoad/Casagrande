@@ -16,8 +16,9 @@ import { handleAdmissions } from './admissions.js'
 import { handleIntegrations, publicArticles } from './integrations.js'
 import { handleMetrics, json, allowPublicAction, secretMatches } from './observability.js'
 import { handleMaintenance, handleScopedMaintenance } from './maintenance.js'
-import { handleEditorial, publicEditorial } from './editorial-engine.js'
-import { readOpenSeoMetrics } from './openseo.js'
+import { handleEditorial, publicEditorial, ensurePlan } from './editorial-engine.js'
+import { readOpenSeoMetrics, importProjectKeywords } from './openseo.js'
+import {marketSnapshot,researchSource} from './openseo-ecuador.js'
 import { publicKeywordObservations } from './openseo-observations.js'
 import { institutionalUrl } from './editorial-draft.js'
 import { tableExists } from './workspace.js'
@@ -72,6 +73,17 @@ async function route(request,env,url,manual,onLeadCreated) {
     const res=await route(new Request(request.url,{method:'GET',headers:request.headers}),env,url,manual)
     return new Response(null,{status:res.status,headers:res.headers})
   }
+  if (path === '/api/maintenance/openseo/importar') {
+    if (!await secretMatches(request.headers.get('X-UCG-Mantenimiento'),env.MAINTENANCE_TOKEN)) return json({error:'Credencial de servicio requerida.'},403)
+    if (method!=='POST') return json({error:'Método no permitido.'},405)
+    const length=Number(request.headers.get('content-length'))
+    if(!length || length>96000) return json({error:'Tamaño de importación no admitido.'},413)
+    const data=await request.json().catch(()=>null)
+    const receipt=await importProjectKeywords(env,data,programs)
+    if(!receipt)return json({error:'Comprueba el proyecto, mercado y formato de las estimaciones.'},422)
+    await ensurePlan(env.DB,programs,new Date(),'OpenSEO',true)
+    return json(receipt)
+  }
   if (path === '/api/maintenance/correo/prueba') return handleMailCheck(request,env)
   if (['/api/maintenance/editorial','/api/maintenance/nuevos'].includes(path)) return handleScopedMaintenance(request,env,programs,path.split('/').at(-1))
   if (path === '/api/maintenance') return handleMaintenance(request,env,programs)
@@ -97,12 +109,12 @@ async function route(request,env,url,manual,onLeadCreated) {
   if (path.startsWith('/api/') || path.startsWith('/preferencias/')) {
     if (path==='/api/editorial/publico' && method==='GET') {
       const overview=await publicEditorial(env,programs)
-      const publicSources=new Set(['Catálogo institucional UCG','OpenSEO · Keyword Generator'])
+      const publicSources=new Set(['Catálogo institucional UCG','OpenSEO · Keyword Generator',researchSource])
       const sources=overview.sources.filter(row=>publicSources.has(row.label))
       const plan=overview.plan.map(row=>({...row,evidence:{
-        search:row.evidence?.search?.source==='OpenSEO · Keyword Generator'?row.evidence.search:null
+        search:publicSources.has(row.evidence?.search?.source)?row.evidence.search:null
       }}))
-      return json({...overview,plan,sources,marketResearch:publicKeywordObservations})
+      return json({...overview,plan,sources,marketResearch:[...marketSnapshot,...publicKeywordObservations.filter(row=>!marketSnapshot.some(m=>m.program===row.program && m.keyword===row.keyword))]})
     }
     if (path==='/api/staff/editorial/rendimiento' && method==='GET') return json(await articlePerformance(env))
     if (path==='/api/staff/openseo' && method==='GET') {

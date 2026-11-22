@@ -2,6 +2,8 @@ import {brand,programs as catalog} from './catalog.js';
 import {all, normalized, now, select} from './providers.js';
 import {publicKeywordObservations} from './openseo-observations.js';
 
+import {ecuadorResearch, researchDate, researchProject, researchSource} from './openseo-ecuador.js';
+
 const endpointDefault='https://app.openseo.so/mcp';
 const market=Object.freeze({country:'Ecuador',language:'es',locationCode:2218});
 const reads=Object.freeze({
@@ -499,7 +501,11 @@ export async function syncOpenSeo(env,programs=catalog) {
     await sourceWrite(db,'proyecto',null,'error',date,null,error.message).run().catch(()=>{});
     return {status:'error',message:error.message};
   }
-  if(!connection)return {status:'sin_configurar',message:statuses.sin_configurar};
+  if(!connection) {
+    const viaConnector=await select(db,"SELECT checked_at FROM openseo_sources WHERE key='proyecto' AND project_id=? AND detail=?",researchProject,'Proyecto vinculado mediante el conector OpenSEO.').first();
+    if(viaConnector && Date.now()-Date.parse(viaConnector.checked_at)<48*3600000) return {status:'completado',message:'Lectura recibida mediante la conexión de OpenSEO.'};
+    return {status:'sin_configurar',message:statuses.sin_configurar};
+  }
   let token;
   try {token=await lease(db,date);}
   catch(error) {
@@ -586,7 +592,10 @@ export async function readOpenSeoMetrics(db,program,options={}) {
     const keywords=keywordRows.filter(row=>row.program===info.slug).map(row=>decode(row.payload)).filter(Boolean);
     const covered=new Set(keywords.filter(item=>item.sourceKey==='saved_keywords' && item.volume!==null).map(item=>normalized(item.keyword)));
     const observed=examples.filter(item=>item.program===info.slug && !covered.has(normalized(item.keyword)));
-    const combined=[...keywords,...observed];
+    const baseline=ecuadorResearch.filter(row=>row.program===info.slug && !covered.has(normalized(row.keyword)))
+      .map(row=>({...metricEntry('project_snapshot',row.program,row.keyword,row),source:researchSource,
+        observedAt:safeDate(researchDate),trustedEstimate:true}));
+    const combined=[...keywords,...observed,...baseline];
     const audit=decode(auditRows.find(row=>row.program===info.slug)?.payload);
     const sources=statusesPassthrough.filter(row=>['gsc','saved_keywords','rank','audit','keyword_generator'].includes(row.key)).map(row=>{
       const evidence=combined.filter(item=>item.sourceKey===row.key);
@@ -599,4 +608,36 @@ export async function readOpenSeoMetrics(db,program,options={}) {
   const domainRow=statusRows.find(row=>row.key==='domain'&&row.project_id===project?.id);
   return {market,project:project||null,sources:statusesPassthrough,programs:cards,generalKeywords:examples.filter(item=>item.program===null),
     domain:decode(domainRow?.payload),policy:documentedPolicy};
+}
+
+// Consume only national keyword estimates relayed by the authorized OpenSEO task.
+export async function importProjectKeywords(env,input,programs=catalog) {
+  if(input?.projectId!==researchProject || input.locationCode!==2218 || input.languageCode!=='es' ||
+      !Array.isArray(input.rows) || !input.rows.length || input.rows.length>250) return null;
+  const matcher=programMatcher(programs,null);
+  const catalogMap=new Map(ecuadorResearch.map(row=>[normalized(row.keyword),row.program]));
+  const date=now(), incoming=new Map();
+  for(const row of input.rows) {
+    const keyword=term(row?.keyword);
+    if(!keyword) return null;
+    const program=catalogMap.get(normalized(keyword))||matcher.byTerm(keyword);
+    if(!program)continue;
+    const fields={volume:row.searchVolume??null,difficulty:row.keywordDifficulty??null,cpc:row.cpc??null,competition:row.competition??null};
+    if(Object.values(fields).some(v=>v!==null && (!Number.isFinite(v)||v<0)) || fields.difficulty>100 || fields.competition>1) return null;
+    const key=program+'|'+keywordKey({keyword});
+    incoming.set(key,{...metricEntry('saved_keywords',program,keyword,fields),sourceUrl:null});
+  }
+  if(!incoming.size)return null;
+  const db=env.DB;
+  const project={id:researchProject,domain:'casagrande.edu.ec',locationCode:2218,languageCode:'es',name:'Universidad Casa Grande · Posgrados'};
+  const writes=[sourceWrite(db,'proyecto',project.id,'disponible',date,null,'Proyecto vinculado mediante el conector OpenSEO.',project,true),
+    sourceWrite(db,'saved_keywords',project.id,'disponible',date,null,'Estimaciones del proyecto transmitidas por el conector autorizado.')];
+  for(const [key,row] of incoming) {
+    writes.push(select(db,`INSERT INTO openseo_keywords(project_id,source,program,keyword_key,payload)
+      VALUES(?,'saved_keywords',?,?,?) ON CONFLICT(project_id,source,program,keyword_key) DO UPDATE SET payload=excluded.payload
+      WHERE json_remove(openseo_keywords.payload,'$.checkedAt','$.observedAt')<>json_remove(excluded.payload,'$.checkedAt','$.observedAt')`,
+      project.id,row.program,key,JSON.stringify({...row,checkedAt:date,observedAt:date})));
+  }
+  const result=await db.batch(writes);
+  return {rows:incoming.size,changed:result.slice(2).reduce((n,r)=>n+(r.meta?.changes||0),0)};
 }
