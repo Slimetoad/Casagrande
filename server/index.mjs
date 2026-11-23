@@ -1811,6 +1811,77 @@ function handlePublicRobots(requestUrl) {
   });
 }
 
+function formatProgramPrice(price) {
+  return typeof price === 'number' && Number.isFinite(price) && price > 0
+    ? `$${price.toLocaleString('en-US')} USD`
+    : 'Consultar con Admisiones';
+}
+
+function enrichCatalogProgram(p) {
+  return {
+    slug: p.slug,
+    shortTitle: p.shortTitle,
+    title: p.title,
+    area: p.area,
+    family: p.family || null,
+    mode: p.mode || null,
+    duration: p.duration || null,
+    price: p.price ?? null,
+    priceFormatted: formatProgramPrice(p.price),
+    cesResolution: p.cesResolution || null,
+    schedule: p.schedule || null,
+    graduationMode: p.graduationMode || null,
+    doubleDegree: p.doubleDegree || null,
+    financing: p.financing || brand.financingPolicy || null,
+    admissionProcess: Array.isArray(p.admissionProcess) ? p.admissionProcess : (brand.admissionsSteps || []),
+    entryProfile: p.entryProfile || null,
+    graduateProfile: Array.isArray(p.graduateProfile) ? p.graduateProfile : [],
+    curriculumPeriods: p.curriculumPeriods || null,
+    brochure: p.brochure || null,
+    admissionsStatus: p.admissionsStatus || 'Consultar convocatoria',
+    applicationUrl: p.applicationUrl || null,
+    url: p.url,
+    ...programFact(p)
+  };
+}
+
+function summarizeCatalogAreas() {
+  const grouped = new Map();
+  for (const p of programs) {
+    const entry = grouped.get(p.area) || { area: p.area, count: 0, programs: [] };
+    entry.count += 1;
+    entry.programs.push({
+      slug: p.slug,
+      shortTitle: p.shortTitle,
+      family: p.family || null,
+      priceFormatted: formatProgramPrice(p.price)
+    });
+    grouped.set(p.area, entry);
+  }
+  return [...grouped.values()];
+}
+
+function fallbackCatalogMatches(query) {
+  const stopWords = new Set('para como con del que una por los las quiero saber tengo casa grande universidad maestria maestrias posgrado posgrados sobre es en de mi un y el la'.split(' '));
+  const words = normalized(query).split(/[^a-z0-9]+/).filter(w => (w.length > 2 || w === 'ia') && !stopWords.has(w));
+  if (!words.length) return [];
+  return programs
+    .map(p => {
+      const hay = normalized([
+        p.slug, p.shortTitle, p.title, p.area, p.family, p.degree,
+        p.summary, p.doubleDegree, p.graduationMode, p.schedule,
+        ...(p.curriculum || []),
+        ...(p.curriculumPeriods?.period1 || []),
+        ...(p.curriculumPeriods?.period2 || [])
+      ].filter(Boolean).join(' '));
+      const score = words.reduce((acc, w) => acc + (hay.includes(w) ? 1 : 0), 0);
+      return { p, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.p);
+}
+
 async function handleCatalogLookup(request) {
   let payload;
   try {
@@ -1824,27 +1895,48 @@ async function handleCatalogLookup(request) {
   const slug = clean(args.slug, 120).toLowerCase();
   const area = clean(args.area, 80);
   const query = clean(args.query || args.q || args.program, 300);
+  const normQuery = normalized(query);
+  const isOverviewQuery = /^(?:todos|todas|catalogo|oferta|programas|maestrias|posgrados|areas|resumen)$/.test(normQuery)
+    || /\b(?:todos los programas|todas las maestrias|todo el catalogo|catalogo completo|que maestrias|lista de maestrias|areas academicas|programas disponibles)\b/.test(normQuery);
 
   let matched = [];
   if (slug) {
-    const exact = programs.find(p => p.slug === slug);
+    const exact = programs.find(p => p.slug === slug || normalized(p.slug) === normalized(slug));
     if (exact) matched = [exact];
   }
-  if (!matched.length && query) {
+  if (!matched.length && query && !isOverviewQuery) {
     matched = matches(query, programs);
+    if (!matched.length) matched = fallbackCatalogMatches(query);
+    if (area && matched.length > 1) {
+      const targetArea = normalized(area);
+      const filtered = matched.filter(p => normalized(p.area).includes(targetArea));
+      if (filtered.length) matched = filtered;
+    }
   }
   if (!matched.length && area) {
     const targetArea = normalized(area);
     matched = programs.filter(p => normalized(p.area).includes(targetArea));
   }
-  if (!matched.length && !slug && !query && !area) {
-    matched = programs.slice(0, 6);
+  const overviewMode = !matched.length && (isOverviewQuery || (!slug && !query && !area));
+  if (overviewMode) {
+    const seenAreas = new Set();
+    matched = programs.filter(p => !seenAreas.has(p.area) && seenAreas.add(p.area));
   }
 
+  const limit = overviewMode ? 7 : 6;
   return Response.json({
     ok: true,
-    total: matched.length,
-    programs: matched.slice(0, 6).map(p => ({ slug: p.slug, shortTitle: p.shortTitle, ...programFact(p) })),
+    total: overviewMode ? programs.length : matched.length,
+    programs: matched.slice(0, limit).map(enrichCatalogProgram),
+    ...(overviewMode || !matched.length ? { areaSummary: summarizeCatalogAreas() } : {}),
+    brand: {
+      name: brand.name,
+      admissionsPhone: brand.admissionsPhone,
+      whatsappPhone: brand.whatsappPhone,
+      admissionsEmail: brand.admissionsEmail,
+      campusAddress: brand.campusAddress,
+      financingPolicy: brand.financingPolicy
+    },
     catalogUrl: brand.catalogUrl,
     admissionsPhone: brand.admissionsPhone
   }, {

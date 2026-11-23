@@ -18,6 +18,7 @@ const AGENT_NAME = 'UCG Posgrados · Oficial de Admisiones (Ecuador)';
 const PHONE_NICKNAME = 'UCG Posgrados Admisiones';
 const PROTECTED_NUMBERS = new Set(['+17874920528']);
 const PORTAL_URL = 'https://slimetoad.github.io/Casagrande/';
+const DEFAULT_CATALOG_LOOKUP_URL = 'https://casagrande-posgrados-production.up.railway.app/api/retell/catalog-lookup';
 const DEFAULT_LLM_MODEL = 'gpt-5.4';
 const VOICE_ID = '11labs-Andrea';
 const VOICE_MODEL = 'eleven_flash_v2_5';
@@ -32,13 +33,22 @@ const BOOSTED_KEYWORDS = [
   'Casa Grande',
   'UCG',
   'Guayaquil',
+  'Miraflores',
   'Ecuador',
   'Quito',
   'Cuenca',
   'posgrados',
+  'posgrado',
   'maestría',
   'Magíster',
   'complexivo',
+  'titulación',
+  'doble titulación',
+  'UCAM',
+  'SENESCYT',
+  'CES',
+  'financiamiento',
+  'arancel',
   'tercer nivel',
   'admisiones',
   'convocatoria',
@@ -75,6 +85,8 @@ const BOOSTED_KEYWORDS = [
 function parseArgs(argv) {
   const opts = {
     webhookUrl: process.env.RETELL_WEBHOOK_URL?.trim() || '',
+    catalogLookupUrl:
+      process.env.RETELL_CATALOG_LOOKUP_URL?.trim() || process.env.RETELL_CATALOG_URL?.trim() || '',
     phone: process.env.RETELL_INBOUND_NUMBER?.trim() || '',
     areaCode: process.env.RETELL_AREA_CODE ? Number(process.env.RETELL_AREA_CODE) : null,
     countryCode: process.env.RETELL_COUNTRY_CODE?.trim() || '',
@@ -92,6 +104,12 @@ function parseArgs(argv) {
       opts.webhookUrl = argv[++i].trim();
     } else if (arg.startsWith('--webhook-url=')) {
       opts.webhookUrl = arg.slice('--webhook-url='.length).trim();
+    } else if ((arg === '--catalog-url' || arg === '--catalog-lookup-url') && argv[i + 1]) {
+      opts.catalogLookupUrl = argv[++i].trim();
+    } else if (arg.startsWith('--catalog-url=')) {
+      opts.catalogLookupUrl = arg.slice('--catalog-url='.length).trim();
+    } else if (arg.startsWith('--catalog-lookup-url=')) {
+      opts.catalogLookupUrl = arg.slice('--catalog-lookup-url='.length).trim();
     } else if (arg === '--phone' && argv[i + 1]) {
       opts.phone = argv[++i].trim();
     } else if (arg.startsWith('--phone=')) {
@@ -140,59 +158,162 @@ function parseArgs(argv) {
     }
   }
 
+  if (!opts.catalogLookupUrl) {
+    opts.catalogLookupUrl = opts.webhookUrl
+      ? `${new URL(opts.webhookUrl).origin}/api/retell/catalog-lookup`
+      : DEFAULT_CATALOG_LOOKUP_URL;
+  } else {
+    const parsedCatalog = new URL(opts.catalogLookupUrl);
+    if (!['https:', 'http:'].includes(parsedCatalog.protocol)) {
+      throw new Error(`catalogUrl inválida: ${opts.catalogLookupUrl}`);
+    }
+  }
+
   return opts;
 }
 
 function formatPriceUsd(price) {
   if (Number.isFinite(price) && price > 0) {
-    return `$${price.toLocaleString('en-US')} USD`;
+    const monthly18 = Math.round(price / 18);
+    return `$${price.toLocaleString('en-US')} USD (ref. 18m: ~$${monthly18}/mes)`;
   }
-  return 'Consultar con Admisiones (inversión no publicada en catálogo)';
+  return 'Consultar con Admisiones';
 }
 
-function compileCatalogPrompt(catalogPrograms) {
+function mostCommonValue(values) {
+  const counts = new Map();
+  for (const val of values.filter(Boolean)) {
+    counts.set(val, (counts.get(val) || 0) + 1);
+  }
+  let best = '';
+  let bestCount = 0;
+  for (const [val, count] of counts.entries()) {
+    if (count > bestCount) {
+      best = val;
+      bestCount = count;
+    }
+  }
+  return bestCount > 1 ? best : '';
+}
+
+function deriveFamilyDefaults(catalogPrograms) {
+  const defaults = {};
+  const families = [...new Set(catalogPrograms.map((p) => p.family).filter(Boolean))];
+  for (const family of families) {
+    const group = catalogPrograms.filter((p) => p.family === family);
+    defaults[family] = {
+      schedule: mostCommonValue(group.map((p) => p.schedule)),
+      graduationMode: mostCommonValue(group.map((p) => p.graduationMode)),
+      financing: mostCommonValue(group.map((p) => p.financing)),
+      admissionProcess: mostCommonValue(
+        group.map((p) => (Array.isArray(p.admissionProcess) ? p.admissionProcess.join(' ') : '')),
+      ),
+    };
+  }
+  return defaults;
+}
+
+function compileCatalogPrompt(catalogPrograms, familyDefaults) {
   return catalogPrograms
     .map((program, index) => {
-      const subjects = Array.isArray(program.curriculum) && program.curriculum.length
+      const fam = familyDefaults[program.family] || {};
+      const period1 = Array.isArray(program.curriculumPeriods?.period1) && program.curriculumPeriods.period1.length
+        ? program.curriculumPeriods.period1.join(', ')
+        : '';
+      const period2 = Array.isArray(program.curriculumPeriods?.period2) && program.curriculumPeriods.period2.length
+        ? program.curriculumPeriods.period2.join(', ')
+        : '';
+      const fallbackCurriculum = Array.isArray(program.curriculum) && program.curriculum.length
         ? program.curriculum.join(', ')
         : 'Consultar malla vigente con Admisiones';
       const priceText = formatPriceUsd(program.price);
       const links = [
         `Ficha: ${program.url}`,
-        program.brochure ? `Folleto PDF: ${program.brochure}` : '',
+        program.brochure ? `Folleto: ${program.brochure}` : '',
         program.applicationUrl ? `Postulación: ${program.applicationUrl}` : '',
       ]
         .filter(Boolean)
         .join(' | ');
-      return [
+      const admission = Array.isArray(program.admissionProcess) && program.admissionProcess.length
+        ? program.admissionProcess.join(' ')
+        : '';
+
+      const lines = [
         `${index + 1}. [${program.slug}] ${program.title}`,
-        `   Área: ${program.area} | Línea: ${program.family} | Modalidad: ${program.mode} | Duración: ${program.duration} | Inversión: ${priceText} | Estado: ${program.admissionsStatus}`,
-        `   Título: ${program.degree} | Enfoque: ${program.summary}`,
-        `   Asignaturas clave: ${subjects}`,
-        `   ${links}`,
-      ].join('\n');
+        `   Área: ${program.area} | Línea: ${program.family} | Mod: ${program.mode} | Dur: ${program.duration} | Inv: ${priceText} | Estado: ${program.admissionsStatus}`,
+        `   Título: ${program.degree} | CES: ${program.cesResolution || 'Consultar con Admisiones'}`,
+      ];
+
+      const scheduleDiff = program.schedule && program.schedule !== fam.schedule;
+      const gradDiff = program.graduationMode && program.graduationMode !== fam.graduationMode;
+      if (scheduleDiff || gradDiff) {
+        const parts = [];
+        if (scheduleDiff) parts.push(`Horario: ${program.schedule}`);
+        if (gradDiff) parts.push(`Titulación: ${program.graduationMode}`);
+        lines.push(`   ${parts.join(' | ')}`);
+      }
+      if (program.doubleDegree) lines.push(`   Doble titulación: ${program.doubleDegree}`);
+      if (program.financing && program.financing !== fam.financing) {
+        lines.push(`   Financiamiento: ${program.financing}`);
+      }
+      if (program.entryProfile) lines.push(`   Ingreso: ${program.entryProfile}`);
+      if (admission && admission !== fam.admissionProcess) lines.push(`   Admisión: ${admission}`);
+      if (period1 || period2) {
+        if (period1) lines.push(`   Período I: ${period1}`);
+        if (period2) lines.push(`   Período II: ${period2}`);
+      } else {
+        lines.push(`   Malla: ${fallbackCurriculum}`);
+      }
+      lines.push(`   Enfoque: ${program.summary} | ${links}`);
+      return lines.join('\n');
     })
     .join('\n');
 }
 
 function buildGeneralPrompt(catalogPrograms, institution) {
-  const catalogBlock = compileCatalogPrompt(catalogPrograms);
+  const familyDefaults = deriveFamilyDefaults(catalogPrograms);
+  const catalogBlock = compileCatalogPrompt(catalogPrograms, familyDefaults);
   const areas = [...new Set(catalogPrograms.map((p) => p.area))].join(', ');
+  const admissionsStepsText = Array.isArray(institution.admissionsSteps)
+    ? institution.admissionsSteps.join(' ')
+    : '';
+  const familySummaryLines = Object.entries(familyDefaults)
+    .map(([family, d]) => {
+      const parts = [`Línea ${family}:`];
+      if (d.schedule) parts.push(`Horario estándar: ${d.schedule}`);
+      if (d.graduationMode) parts.push(`Titulación estándar: ${d.graduationMode}.`);
+      if (d.financing) parts.push(`Financiamiento: ${d.financing}`);
+      if (d.admissionProcess) parts.push(`Admisión: ${d.admissionProcess}`);
+      return `- ${parts.join(' ')}`;
+    })
+    .join('\n');
 
   return `Usted es Andrea, Oficial de Admisiones de Posgrados de la ${institution.name} (${institution.shortName}), ubicada en ${institution.city}.
 Su misión es brindar una orientación cálida, precisa y profesional a los aspirantes interesados en las ${catalogPrograms.length} maestrías oficiales de posgrado, resolver sus consultas con datos verificados, recopilar y verificar rigurosamente sus datos de contacto y perfil académico, y solicitar su autorización para enviarles un correo personalizado de resumen y agradecimiento.
 
 DATOS INSTITUCIONALES OFICIALES (ÚNICA FUENTE AUTORIZADA):
 - Institución: ${institution.name} (${institution.shortName}) — ${institution.city}
+- Campus Guayaquil: ${institution.campusAddress}
 - Teléfono oficial de Admisiones en Guayaquil: ${institution.admissionsPhone} (en voz alta léalo como: «más cinco nueve tres, cuatro, tres siete dos, seis dos cinco cero»)
+- WhatsApp oficial de Admisiones: ${institution.whatsappPhone} (en voz alta léalo dígito por dígito: «más cinco nueve tres, nueve, cinco ocho seis cuatro, cuatro siete cuatro uno»)
+- Correos oficiales: ${institution.admissionsEmail} (Admisiones) y ${institution.postgraduateEmail} (Posgrados)
 - Portal informativo de Posgrados: ${PORTAL_URL}
 - Sitio institucional de Posgrados: ${institution.catalogUrl} y maestrías flexibles en ${institution.flexibleCatalogUrl}
 - Áreas académicas del catálogo vigente (${catalogPrograms.length} programas verificados al ${institution.verifiedAt}): ${areas}.
-- Modalidad publicada en el catálogo vigente: los ${catalogPrograms.length} programas listados se imparten en modalidad En línea. Los programas de línea Flexible (12 meses) tienen tutorías en vivo los sábados o domingos de 08:00 a 13:00 y titulación mediante examen complexivo; los de línea Inmersiva (2 semestres) cuentan con folleto oficial descargable y valor de inversión confirmado por Admisiones.
+- Política general de financiamiento: ${institution.financingPolicy}
+- Proceso general de admisión: ${admissionsStepsText}
+- Modalidad publicada en el catálogo vigente: los ${catalogPrograms.length} programas listados se imparten en modalidad En línea. Los programas de línea Flexible (12 meses) tienen tutorías sincrónicas los sábados o domingos de 08:00 a 13:00 y titulación mediante examen complexivo; los de línea Inmersiva (2 semestres) cuentan con sesiones sincrónicas programadas según cada cohorte, folleto oficial descargable y opción a doble titulación UCAM (España) en programas seleccionados.
+
+REGLAS ESTÁNDAR POR LÍNEA (APLICAN SALVO INDICACIÓN ESPECÍFICA EN EL PROGRAMA):
+${familySummaryLines}
+
+HERRAMIENTA EN VIVO DEL CATÁLOGO (consultar_catalogo_ucg):
+- Dispone de la función consultar_catalogo_ucg conectada al catálogo oficial de UCG en vivo.
+- Úsela cuando el aspirante pida comparar varias maestrías o solicite detalles profundos (malla completa por períodos, resolución CES, doble titulación UCAM, requisitos específicos de ingreso, financiamiento o horarios exactos) para confirmar siempre datos al día sin improvisar.
 
 IDIOMA Y DIALECTO (ESPAÑOL ECUATORIANO — REGLA ESTRICTA):
 - Hable siempre en español ecuatoriano culto, cercano, cálido y respetuoso, utilizando de forma consistente el trato de «usted».
-- Use expresiones naturales de Ecuador como «Mucho gusto», «Con todo gusto», «Con mucho gusto», «¿Cómo le puedo ayudar?», «Permítame», «Disculpe», «maestrías», «posgrados», «inversión», «malla curricular», «título de tercer nivel» y «cohorte».
+- Use expresiones naturales de Ecuador como «Mucho gusto», «Con todo gusto», «Con mucho gusto», «¿Cómo le puedo ayudar?», «Permítame», «Disculpe», «maestrías», «posgrados», «inversión», «malla curricular», «título de tercer nivel», «SENESCYT» y «cohorte».
 - PROHIBIDO usar «vosotros» de España («vosotros», «os», «tenéis», «vale») y PROHIBIDO usar modismos mexicanos o argentinos («qué padre», «ándale», «órale», «chido», «che», «bárbaro», «vos sabés»).
 - Manténgase 100 % en español durante toda la llamada, incluidos deletreos, arroba, punto, números y nombres de programas. Cambie al inglés únicamente si el interlocutor habla una oración completa en inglés y pide expresamente continuar en ese idioma.
 
@@ -201,9 +322,10 @@ ESTILO CONVERSACIONAL PARA VOZ:
 - PROHIBIDO usar listas con viñetas, numeraciones, negritas, enlaces URL literales ni formatos escritos en su diálogo hablado. Cuando mencione enlaces o folletos, diga por ejemplo: «Con todo gusto le enviamos el enlace oficial y el folleto a su correo electrónico».
 
 VERACIDAD Y LÍMITES DEL CATÁLOGO (CERO INVENCIONES):
-- Responda cualquier pregunta sobre la Universidad Casa Grande y sus ${catalogPrograms.length} maestrías basándose ÚNICAMENTE en el catálogo verificado al final de estas instrucciones.
-- NUNCA invente aranceles, descuentos, becas, planes de cuotas ni fechas exactas de inicio de clases que no figuren en el catálogo.
-- Si una maestría tiene inversión «Consultar con Admisiones» (por ejemplo las maestrías Inmersivas) o no tiene fecha de inicio publicada, dígalo con total transparencia: explique que el valor exacto y el calendario de la próxima cohorte los confirma directamente Admisiones y ofrezca enviarle el resumen y enlace por correo.
+- Responda cualquier pregunta sobre la Universidad Casa Grande y sus ${catalogPrograms.length} maestrías basándose ÚNICAMENTE en el catálogo verificado al final de estas instrucciones o en la herramienta consultar_catalogo_ucg.
+- NUNCA invente aranceles, porcentajes exactos de descuento por convenio, becas no publicadas ni fechas exactas de inicio de clases que no figuren en el catálogo.
+- Si una maestría es de línea Inmersiva (inversión «Consultar con Admisiones») o no tiene fecha de inicio publicada, dígalo con total transparencia: nunca invente un precio; explique que el valor exacto, convenios y calendario de la próxima cohorte los confirma directamente Admisiones y ofrezca enviarle el folleto oficial y el resumen por correo.
+- Cuando la maestría sí tiene inversión publicada (programas Flexibles de $2,800, $3,000 o $3,200 USD), indíquela claramente y ofrezca como referencia el financiamiento directo hasta 18 meses (por ejemplo cuotas referenciales cercanas a 156, 167 o 178 dólares mensuales sin entrada, siempre aclarando que es una referencia sujeta a evaluación y condiciones vigentes con Admisiones, además de opciones con tarjeta de crédito o convenios).
 - Si una maestría figura con «Inscripciones cerradas», infórmelo con amabilidad y ofrezca registrar su interés para que Admisiones le avise en la próxima convocatoria o sugerirle una alternativa abierta en la misma área.
 - Si el aspirante pregunta por modalidad presencial o híbrida, aclare honestamente que los ${catalogPrograms.length} programas del catálogo vigente se dictan en línea, y anote su preferencia modal para que Admisiones le oriente si hay opciones específicas.
 
@@ -230,7 +352,7 @@ Si el aspirante hace una consulta inicial sobre una maestría, primero respónda
    - Ciudad de residencia (ej. Guayaquil, Quito, Cuenca u otra ciudad/país).
    - Modalidad preferida (en línea, híbrida o presencial).
    - Horizonte estimado de inicio (ej. próxima cohorte, este mes, en tres meses, próximo año).
-   - Título de tercer nivel o formación profesional previa.
+   - Título de tercer nivel o formación profesional previa (y si está registrado en SENESCYT o si es del extranjero).
    - Preguntas clave o posibles obstáculos que desee resolver (horarios laborales o tutorías de fin de semana, financiamiento o formas de pago, requisitos de postulación o documentación).
 
 5. CONSENTIMIENTO DE ENVÍO Y CIERRE CÁLIDO:
@@ -383,7 +505,9 @@ async function retellRequest(apiKey, path, { method = 'GET', body } = {}) {
   }
   if (!response.ok) {
     const detail = typeof data === 'string' ? data : JSON.stringify(data);
-    throw new Error(`Retell API ${method} ${path} falló (${response.status}): ${detail}`);
+    const err = new Error(`Retell API ${method} ${path} falló (${response.status}): ${detail}`);
+    err.status = response.status;
+    throw err;
   }
   return data;
 }
@@ -410,10 +534,20 @@ async function listPhoneNumbers(apiKey) {
 
 async function upsertLlm(apiKey, existingLlmId, payload) {
   if (existingLlmId) {
-    return retellRequest(apiKey, `/update-retell-llm/${encodeURIComponent(existingLlmId)}`, {
-      method: 'PATCH',
-      body: payload,
-    });
+    try {
+      return await retellRequest(apiKey, `/update-retell-llm/${encodeURIComponent(existingLlmId)}`, {
+        method: 'PATCH',
+        body: payload,
+      });
+    } catch (error) {
+      if (error?.status === 400 && /published/i.test(error.message)) {
+        return retellRequest(apiKey, '/create-retell-llm', {
+          method: 'POST',
+          body: payload,
+        });
+      }
+      throw error;
+    }
   }
   return retellRequest(apiKey, '/create-retell-llm', {
     method: 'POST',
@@ -485,6 +619,7 @@ async function main() {
 
 Opciones:
   --webhook-url <url>     URL pública HTTPS para eventos webhook (ej. https://.../api/webhooks/retell)
+  --catalog-url <url>     URL pública HTTPS para consultar_catalogo_ucg (por defecto deriva de --webhook-url o usa Railway)
   --clear-webhook         Limpia webhook_url del agente (deja null)
   --phone <e164>          Número UCG existente a actualizar (si se omite, reutiliza el UCG existente o compra uno nuevo)
   --area-code <3dig>      Código de área opcional (ej. 305) al comprar un número nuevo en Retell
@@ -498,6 +633,51 @@ Opciones:
 
   const generalPrompt = buildGeneralPrompt(programs, brand);
   const postCallAnalysisData = buildPostCallAnalysisData(programs);
+  const llmPayload = {
+    model: opts.model,
+    general_prompt: generalPrompt,
+    begin_message: BEGIN_MESSAGE,
+    start_speaker: 'agent',
+    general_tools: [
+      {
+        type: 'custom',
+        name: 'consultar_catalogo_ucg',
+        description:
+          'Consulta información verificada y detallada de cualquier maestría de la Universidad Casa Grande: inversión exacta, horario y tutorías, malla curricular completa por períodos, resolución CES, doble titulación, requisitos de ingreso y financiamiento.',
+        url: opts.catalogLookupUrl,
+        speak_during_execution: true,
+        execution_message_type: 'static_text',
+        execution_message_description:
+          'Permítame verificar ese dato exacto en el catálogo oficial de Posgrados...',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Nombre, tema o palabra clave de la maestría o área académica',
+            },
+            slug: {
+              type: 'string',
+              description: 'Slug exacto si se conoce',
+            },
+            area: {
+              type: 'string',
+              description:
+                'Área de estudio opcional (Negocios, Tecnología, Derecho, Educación, Comunicación, Salud, Arquitectura)',
+            },
+          },
+        },
+        speak_after_execution: true,
+      },
+      {
+        type: 'end_call',
+        name: 'end_call',
+        description:
+          'Finalizar la llamada cortésmente cuando se hayan respondido las consultas, verificado o registrado los datos y cerrado la despedida.',
+        speak_after_execution: true,
+      },
+    ],
+  };
 
   if (opts.dryRun) {
     console.log(
@@ -508,11 +688,13 @@ Opciones:
           programsCompiled: programs.length,
           promptChars: generalPrompt.length,
           postCallFields: postCallAnalysisData.map((f) => `${f.name}:${f.type}`),
+          tools: llmPayload.general_tools.map((t) => ({ name: t.name, type: t.type, url: t.url || null })),
           voiceId: VOICE_ID,
           voiceModel: VOICE_MODEL,
           language: LANGUAGE,
           llmModel: opts.model,
           webhookUrl: opts.webhookUrl || null,
+          catalogLookupUrl: opts.catalogLookupUrl,
           phone: opts.skipPhone ? null : opts.phone || '(auto: reuse UCG number or purchase new via /create-phone-number)',
           protectedNumbers: [...PROTECTED_NUMBERS],
         },
@@ -527,22 +709,6 @@ Opciones:
   if (!apiKey) {
     throw new Error('Falta RETELL_API_KEY en las variables de entorno.');
   }
-
-  const llmPayload = {
-    model: opts.model,
-    general_prompt: generalPrompt,
-    begin_message: BEGIN_MESSAGE,
-    start_speaker: 'agent',
-    general_tools: [
-      {
-        type: 'end_call',
-        name: 'end_call',
-        description:
-          'Finalizar la llamada cortésmente cuando se hayan respondido las consultas, verificado o registrado los datos y cerrado la despedida.',
-        speak_after_execution: true,
-      },
-    ],
-  };
 
   const existingAgents = await listAllAgents(apiKey);
   const matchedAgent = existingAgents.find((agent) => agent.agent_name === AGENT_NAME);
@@ -620,6 +786,7 @@ Opciones:
         programsCompiled: programs.length,
         llm_id: llmId,
         llm_model: llm.model || opts.model,
+        llm_tools: (llm.general_tools || llmPayload.general_tools).map((t) => t.name),
         agent_id: agentId,
         agent_name: verifiedAgent.agent_name,
         version: verifiedAgent.version,

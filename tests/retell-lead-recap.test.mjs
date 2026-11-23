@@ -409,7 +409,7 @@ test('respeta opt_out, consent_email false, migraciones idempotentes, CORS y cat
   assert.equal(evilRes.status, 403);
   assert.equal(evilRes.headers.get('Access-Control-Allow-Origin'), null);
 
-  // /api/retell/catalog-lookup endpoint
+  // /api/retell/catalog-lookup endpoint (enriched facts + brand + overview)
   const lookupRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/retell/catalog-lookup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -419,6 +419,59 @@ test('respeta opt_out, consent_email false, migraciones idempotentes, CORS y cat
   const lookup = await lookupRes.json();
   assert.equal(lookup.ok, true);
   assert.equal(lookup.programs[0].slug, 'maestria-en-ciberseguridad');
+  assert.equal(lookup.programs[0].price, null);
+  assert.equal(lookup.programs[0].priceFormatted, 'Consultar con Admisiones');
+  assert.equal(lookup.programs[0].cesResolution, 'RPC-SO-14-No.229-2022');
+  assert.match(lookup.programs[0].schedule, /sincrónicas/i);
+  assert.match(lookup.programs[0].graduationMode, /EC-Council/i);
+  assert.match(lookup.programs[0].doubleDegree, /UCAM/i);
+  assert.match(lookup.programs[0].financing, /Admisiones UCG/i);
+  assert.ok(Array.isArray(lookup.programs[0].curriculumPeriods?.period1) && lookup.programs[0].curriculumPeriods.period1.length >= 5);
+  assert.ok(Array.isArray(lookup.programs[0].curriculumPeriods?.period2) && lookup.programs[0].curriculumPeriods.period2.length >= 5);
+  assert.ok(Array.isArray(lookup.programs[0].admissionProcess) && lookup.programs[0].admissionProcess.length === 3);
+  assert.ok(lookup.programs[0].entryProfile && Array.isArray(lookup.programs[0].graduateProfile) && lookup.programs[0].graduateProfile.length > 0);
+  assert.equal(lookup.brand.name, 'Universidad Casa Grande');
+  assert.equal(lookup.brand.whatsappPhone, '+593 9 5864 4741');
+  assert.equal(lookup.brand.admissionsEmail, 'admisiones@casagrande.edu.ec');
+  assert.ok(lookup.brand.campusAddress);
+  assert.match(lookup.brand.financingPolicy, /18 meses/i);
+
+  // Lookup Flexible priced program & MBA query
+  const flexLookupRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/retell/catalog-lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug: 'comunicacion-estrategica-e-imagen-institucional' })
+  }), env, ctx);
+  assert.equal(flexLookupRes.status, 200);
+  const flexLookup = await flexLookupRes.json();
+  assert.equal(flexLookup.programs[0].price, 2800);
+  assert.equal(flexLookup.programs[0].priceFormatted, '$2,800 USD');
+  assert.equal(flexLookup.programs[0].cesResolution, 'RPC-SO-30-No.513-2024');
+  assert.equal(flexLookup.programs[0].graduationMode, 'Examen complexivo');
+
+  const mbaLookupRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/retell/catalog-lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args: { query: 'MBA' } })
+  }), env, ctx);
+  assert.equal(mbaLookupRes.status, 200);
+  const mbaLookup = await mbaLookupRes.json();
+  assert.equal(mbaLookup.programs[0].slug, 'maestria-en-administracion-de-empresas');
+  assert.match(mbaLookup.programs[0].doubleDegree, /UCAM/i);
+
+  // Overview query ('todos' / 'catalogo') returns areaSummary + top matches across areas
+  const overviewRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/retell/catalog-lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args: { query: 'todos' } })
+  }), env, ctx);
+  assert.equal(overviewRes.status, 200);
+  const overview = await overviewRes.json();
+  assert.equal(overview.ok, true);
+  assert.equal(overview.total, 34);
+  assert.ok(Array.isArray(overview.areaSummary) && overview.areaSummary.length >= 6);
+  assert.equal(overview.areaSummary.reduce((sum, item) => sum + item.count, 0), 34);
+  assert.ok(overview.programs.length >= 6);
 });
 
 test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y borrado funcionan extremo a extremo', async t => {

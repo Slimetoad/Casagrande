@@ -28,6 +28,7 @@
 
       <nav id="site-nav" class="site-nav" aria-label="Navegación principal">
         <a href="#voz-ia">Oficial IA</a>
+        <a href="#herramientas">Herramientas</a>
         <a href="#catalogo">34 Maestrías</a>
         <a href="#solicitar">Solicitar info</a>
         <a href="./admin/">Admin</a>
@@ -51,6 +52,7 @@
     <div id="mobile-drawer" class="mobile-drawer" hidden>
       <div class="container mobile-drawer-inner">
         <a href="#voz-ia">Oficial de Admisiones IA</a>
+        <a href="#herramientas">Herramientas visuales</a>
         <a href="#catalogo">Catálogo de 34 Maestrías</a>
         <a href="#solicitar">Solicitar información</a>
         <a href="./admin/">Admin</a>
@@ -180,6 +182,169 @@
               </div>
             </article>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CENTRO DE HERRAMIENTAS VISUALES -->
+    <section id="herramientas" class="section tools-section" aria-labelledby="tools-title">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <div class="kicker">
+              <span class="kicker-bar" aria-hidden="true"></span>
+              <span>Centro de Herramientas Visuales</span>
+            </div>
+            <h2 id="tools-title">Elige, simula y compara tu maestría con datos reales</h2>
+            <p class="section-lead">Interactúa con nuestro orientador por afinidad, el simulador visual de cuotas y el comparador cara a cara entre programas oficiales de Universidad Casa Grande.</p>
+          </div>
+          <div class="tools-tabs" role="tablist" aria-label="Herramientas de decisión">
+            <button type="button" id="tab-btn-orientador" class="tool-tab is-active" role="tab" aria-selected="true" aria-controls="tool-tab-orientador" data-tool-tab="orientador">Orientador Visual</button>
+            <button type="button" id="tab-btn-simulador" class="tool-tab" role="tab" aria-selected="false" aria-controls="tool-tab-simulador" data-tool-tab="simulador">Simulador de Inversión</button>
+            <button type="button" id="tab-btn-comparador" class="tool-tab" role="tab" aria-selected="false" aria-controls="tool-tab-comparador" data-tool-tab="comparador">Comparador Cara a Cara</button>
+          </div>
+        </div>
+
+        <!-- TAB 1: ORIENTADOR VISUAL -->
+        <div id="tool-tab-orientador" class="tool-panel" role="tabpanel" aria-labelledby="tab-btn-orientador">
+          <div class="orientador-controls">
+            <label class="tool-field">
+              <span>Área profesional</span>
+              <select id="ori-area">
+                <option value="">Todas las áreas</option>
+              </select>
+            </label>
+            <label class="tool-field">
+              <span>Modalidad preferida</span>
+              <select id="ori-mode">
+                <option value="">Cualquier modalidad</option>
+              </select>
+            </label>
+            <label class="tool-field">
+              <span>Duración deseada</span>
+              <select id="ori-duration">
+                <option value="">Cualquier duración</option>
+                <option value="corta">Compacta (hasta 12 meses)</option>
+                <option value="extendida">Profundización (más de 12 meses)</option>
+              </select>
+            </label>
+            <label class="tool-field">
+              <span>Prioridad principal</span>
+              <select id="ori-priority">
+                <option value="balanced">Equilibrio general</option>
+                <option value="tuition">Arancel público disponible</option>
+                <option value="double">Doble titulación / convenio</option>
+                <option value="weekend">Horarios ejecutivos / fin de semana</option>
+              </select>
+            </label>
+          </div>
+          <p id="ori-summary" class="tool-status-note">Analizando las 34 maestrías oficiales según tu perfil…</p>
+          <div id="ori-results" class="orientador-grid" aria-live="polite"></div>
+        </div>
+
+        <!-- TAB 2: SIMULADOR DE INVERSIÓN -->
+        <div id="tool-tab-simulador" class="tool-panel" role="tabpanel" aria-labelledby="tab-btn-simulador" hidden>
+          <div class="sim-hub-grid">
+            <div class="sim-hub-controls">
+              <label class="tool-field">
+                <span>Selecciona una maestría</span>
+                <select id="hub-sim-program"></select>
+              </label>
+
+              <div id="hub-sim-custom-wrap" class="sim-custom-box" hidden>
+                <div class="sim-range-head">
+                  <label for="hub-sim-tuition-range">Arancel referencial estimado (por confirmar)</label>
+                  <strong id="hub-sim-tuition-readout">$6,500</strong>
+                </div>
+                <input id="hub-sim-tuition-range" type="range" min="2500" max="16000" step="250" value="6500">
+              </div>
+
+              <div class="sim-range-block">
+                <div class="sim-range-head">
+                  <label for="hub-sim-discount-range">Beca o descuento estimado</label>
+                  <strong id="hub-sim-discount-readout">15%</strong>
+                </div>
+                <input id="hub-sim-discount-range" type="range" min="0" max="50" step="5" value="15">
+              </div>
+
+              <div class="sim-range-block">
+                <div class="sim-range-head">
+                  <label for="hub-sim-down-range">Entrada inicial estimada</label>
+                  <strong id="hub-sim-down-readout">20%</strong>
+                </div>
+                <input id="hub-sim-down-range" type="range" min="0" max="80" step="5" value="20">
+              </div>
+
+              <div class="sim-range-block">
+                <div class="sim-range-head">
+                  <label for="hub-sim-months-range">Plazo de cuotas mensuales</label>
+                  <strong id="hub-sim-months-readout">12 meses</strong>
+                </div>
+                <input id="hub-sim-months-range" type="range" min="1" max="36" step="1" value="12">
+              </div>
+
+              <p id="hub-sim-disclaimer" class="tool-disclaimer">Simulación referencial informativa. Confirma arancel exacto, becas vigentes y facilidades de pago con Admisiones UCG.</p>
+            </div>
+
+            <div class="sim-hub-visuals">
+              <div class="sim-donut-header">
+                <div id="hub-sim-donut-mount" class="sim-donut-mount"></div>
+                <div class="sim-monthly-callout">
+                  <span class="sim-callout-label">Cuota mensual referencial</span>
+                  <strong id="hub-sim-monthly" class="sim-monthly-number">$368</strong>
+                  <span id="hub-sim-monthly-sub" class="sim-monthly-sub">12 cuotas · Neto estimado</span>
+                </div>
+              </div>
+
+              <div id="hub-sim-bars-mount" class="sim-bars-mount"></div>
+
+              <div class="sim-kpi-strip">
+                <div><span>Arancel base</span><strong id="hub-sim-gross">$0</strong></div>
+                <div><span>Ahorro / beca</span><strong id="hub-sim-savings">$0</strong></div>
+                <div><span>Entrada</span><strong id="hub-sim-down">$0</strong></div>
+                <div><span>Saldo financiado</span><strong id="hub-sim-financed">$0</strong></div>
+              </div>
+
+              <div class="sim-hub-actions">
+                <button type="button" id="hub-sim-apply-btn" class="btn btn-primary">Solicitar este plan con Admisiones</button>
+                <a id="hub-sim-detail-link" class="btn btn-ghost-dark" href="./programas/">Ver ficha 10x →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: COMPARADOR CARA A CARA -->
+        <div id="tool-tab-comparador" class="tool-panel" role="tabpanel" aria-labelledby="tab-btn-comparador" hidden>
+          <div class="cmp-toolbar">
+            <div class="cmp-presets">
+              <span class="cmp-presets-label">Comparaciones rápidas:</span>
+              <button type="button" class="chip-btn" data-cmp-preset="ia-tech">IA vs Ciberseguridad vs Analítica</button>
+              <button type="button" class="chip-btn" data-cmp-preset="negocios">MBA vs Finanzas vs Proyectos</button>
+              <button type="button" class="chip-btn" data-cmp-preset="educacion">Innovación vs Inclusión vs Bilingüe</button>
+            </div>
+            <div class="cmp-selectors">
+              <label class="tool-field">
+                <span>Programa A</span>
+                <select id="cmp-select-1"></select>
+              </label>
+              <label class="tool-field">
+                <span>Programa B</span>
+                <select id="cmp-select-2"></select>
+              </label>
+              <label class="tool-field">
+                <span>Programa C (opcional)</span>
+                <select id="cmp-select-3"></select>
+              </label>
+            </div>
+          </div>
+
+          <div class="cmp-visual-card">
+            <h3>Comparativa visual de arancel publicado (USD)</h3>
+            <p class="tool-status-note">Solo se grafican valores publicados en el catálogo oficial; si un programa indica «Por confirmar», se muestra explícitamente sin estimar cifras.</p>
+            <div id="cmp-chart-mount" class="cmp-chart-mount"></div>
+          </div>
+
+          <div id="cmp-table-mount" class="cmp-table-wrap"></div>
         </div>
       </div>
     </section>
@@ -398,6 +563,7 @@
         <div class="footer-col">
           <strong>Navegación</strong>
           <a href="#voz-ia">Oficial de Admisiones IA</a>
+          <a href="#herramientas">Herramientas visuales</a>
           <a href="#catalogo">Catálogo de 34 maestrías</a>
           <a href="#solicitar">Solicitar información</a>
           <a href="./admin/">Admin</a>
