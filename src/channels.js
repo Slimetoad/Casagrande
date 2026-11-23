@@ -371,7 +371,7 @@ async function retellWebhook(request,env) {
   if(!env.DB || !secret)return json({error:'Webhook de Retell pendiente de configuración.'},503);
   const signature=request.headers.get('X-Retell-Signature')?.match(/^v=(\d{13}),d=([\da-f]{64})$/i);
   if(!signature || Math.abs(Date.now()-Number(signature[1]))>300000)return json({error:'Firma de Retell no válida o caducada.'},403);
-  const bytes=await bodyBytes(request,524288);
+  const bytes=await bodyBytes(request,2097152);
   if(!await signed(bytes,secret,signature[2],signature[1]))return json({error:'Firma de Retell no válida.'},403);
   const body=parseEvent(bytes), call=body.call;
   if(!['call_started','call_ended','call_analyzed'].includes(body.event) || !knownId(call?.call_id) ||

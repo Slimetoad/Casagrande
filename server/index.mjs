@@ -18,7 +18,7 @@ import { draftEditorialArticle, editorialProposal, institutionalUrl } from '../s
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const PUBLIC_DIR = resolve(ROOT_DIR, 'public');
-const MAX_BODY_BYTES = 512 * 1024;
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const ALLOWED_DEFAULT_ORIGINS = ['https://slimetoad.github.io', 'http://localhost:3000'];
 const CROSS_ORIGIN_PUBLIC_PATHS = new Set([
   '/api/leads',
@@ -1318,6 +1318,9 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
         ? withConversationWake(env, ctx, programs)
         : env;
       response = await serve(forwarded, runtime, renderManual, onLeadCreated);
+      if (path === '/api/webhooks/retell') {
+        console.log('retell webhook:', response.status, 'bytes:', request.headers.get('content-length') || 'stream');
+      }
     }
   }
 

@@ -95,7 +95,8 @@ async function route(request,env,url,manual,onLeadCreated) {
     const trustedCrossOrigin = Boolean(from && env.PUBLIC_BASE_URL && from === origin && origin !== url.origin && crossOriginPublicPaths.has(path))
     if (!trustedCrossOrigin && (request.headers.get('sec-fetch-site') === 'cross-site' || (from && from !== url.origin && from !== origin))) return json({error:'Origen no permitido.'},403)
     const size = Number(request.headers.get('content-length') || 0)
-    if (size > 128000) return json({error:'La solicitud es demasiado grande.'},413)
+    const maxSize = path === '/api/webhooks/retell' ? 2097152 : 128000
+    if (size > maxSize) return json({error:'La solicitud es demasiado grande.'},413)
     if (trustedCrossOrigin) {
       const headers = new Headers(request.headers)
       headers.set('origin', url.origin)

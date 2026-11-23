@@ -804,4 +804,88 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.match(aiDraftJson.article.title, /Ciberseguridad/);
 });
 
+test('webhook de Retell acepta payloads >140 KB (llamadas largas) y despacha expediente y recap', async t => {
+  const { env, DB, ctx, waits } = makeEnv(':memory:');
+  t.after(() => DB.close());
+
+  const sentEmails = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://api.resend.com/emails');
+    sentEmails.push(JSON.parse(options.body));
+    return Response.json({ id: 'resend-long-call-001' });
+  });
+
+  // Pad transcript_object well beyond 140 KB (exceeding the previous 128 KB portal cap)
+  const filler = 'Conversación detallada sobre malla curricular, horarios de tutorías y proceso de admisión en Ecuador. '.repeat(15);
+  const longTurns = Array.from({ length: 100 }, (_, i) => ({
+    role: i % 2 === 0 ? 'agent' : 'user',
+    content: `Turno ${i + 1}: ${filler}`
+  }));
+
+  const call = {
+    call_id: 'call_long_retell_140kb',
+    call_type: 'phone_call',
+    direction: 'inbound',
+    call_status: 'ended',
+    agent_id: AGENT_ID,
+    from_number: '+13017925323',
+    to_number: INBOUND_NUMBER,
+    end_timestamp: Date.now(),
+    transcript_object: longTurns,
+    call_analysis: {
+      in_voicemail: false,
+      custom_analysis_data: {
+        applicant_name: 'Guillermo Moncayo',
+        applicant_email: 'guille.test@example.org',
+        email_confirmed_by_spelling: true,
+        applicant_phone: '+13017925323',
+        phone_confirmed_by_readback: true,
+        program_slug: 'maestria-en-administracion-publica',
+        program_interest: 'Maestría en Administración Pública',
+        city: 'Quito',
+        preferred_modality: 'En línea',
+        start_horizon: 'Próxima cohorte',
+        call_summary_es: 'Guillermo Moncayo llamó interesado en la Maestría en Administración Pública en modalidad en línea.',
+        consent_email: true,
+        human_callback: false,
+        opt_out: false
+      }
+    }
+  };
+
+  const body = JSON.stringify({ event: 'call_analyzed', call });
+  const byteLength = Buffer.byteLength(body, 'utf8');
+  assert.ok(byteLength > 140000, `Expected payload > 140 KB, got ${byteLength}`);
+
+  const ts = String(Date.now());
+  const sig = createHmac('sha256', RETELL_API_KEY).update(body + ts).digest('hex');
+  const req = new Request('https://crm.example.up.railway.app/api/webhooks/retell', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': String(byteLength),
+      'X-Retell-Signature': `v=${ts},d=${sig}`
+    },
+    body
+  });
+
+  const res = await handleHttpRequest(req, env, ctx);
+  assert.equal(res.status, 204);
+  assert.equal(waits.length, 1);
+  await Promise.all(waits);
+
+  const lead = DB.raw.prepare("SELECT * FROM leads WHERE email='guille.test@example.org'").get();
+  assert.ok(lead);
+  assert.equal(lead.name, 'Guillermo Moncayo');
+  assert.equal(lead.program, 'maestria-en-administracion-publica');
+  assert.equal(lead.consent_email, 1);
+
+  const job = DB.raw.prepare('SELECT status, provider_id FROM conversation_nurture_jobs WHERE lead_id=?').get(lead.id);
+  assert.equal(job.status, 'accepted');
+  assert.equal(job.provider_id, 'resend-long-call-001');
+  assert.equal(sentEmails.length, 1);
+  assert.match(sentEmails[0].text, /Hola Guillermo Moncayo,/);
+});
+
+
 
