@@ -14,8 +14,8 @@ from scipy.signal import resample_poly
 HERE = Path(__file__).resolve().parent
 BUILD = HERE / "build"
 SR = 44100
-MUSIC_BED = 0.22      # music level with no voice
-MUSIC_UNDER = 0.10    # music level under the voice
+MUSIC_BED = 0.065     # music level with no voice (about 10 dB under the voice)
+MUSIC_UNDER = 0.035   # music level under the voice (about 15 dB under it)
 VOICE = 1.0
 
 
@@ -61,7 +61,8 @@ def main():
     sf.write(out, mix, SR)
     final = BUILD / "product-demo-final.mp4"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(BUILD / "product-demo.mp4"), "-i", str(out),
-                    "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
+                    "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000",
+                    "-c:a", "aac", "-b:a", "256k",
                     "-shortest", "-movflags", "+faststart", str(final)], check=True)
     print("wrote", final)
 

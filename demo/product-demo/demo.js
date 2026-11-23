@@ -5,10 +5,8 @@
  * Scene lengths stretch to fit their narration (build/narration.json via render.mjs).
  */
 (() => {
-  // Recordings are 25 fps and the film is 30 fps: at exactly 1.2x every film frame shows the next
-  // recorded frame, so playback never stutters. Scenes that need more time hold the last frame.
-  const PLAY_RATE = 1.2;
-  const SOURCE_FPS = 25;
+  const MAX_RATE = 1.3;   // fastest playback of a recording
+  const MIN_RATE = 0.8;   // slowest playback when narration needs more room
   const TRIM = 0.25;      // default preroll skipped at the start of a recording
   const TAIL = 0.35;      // safety margin before a recording's last frame
   const LEAD = 0.55;      // narration starts this long after a scene begins
@@ -149,14 +147,15 @@
     const chip = make('div', 'chip', `<b>${item.tag}</b>${item.chip}`);
     const caption = make('p', 'caption', item.caption);
     node.append(cam, chip, caption);
-    clips.push({ video, start: item.start, dur: item.dur, raw: item.trim, rate: item.rate, usable: item.usable });
+    clips.push({ video, start: item.start, dur: item.dur, raw: item.trim, rate: item.rate });
 
     const s = item.start;
-    master.fromTo(win, { y: 40, z: -140, rotationY: (item.tilt || -12) / 2, rotationX: 3, autoAlpha: 0 },
-      { y: 0, z: 0, rotationY: 0, rotationX: 0, autoAlpha: 1, duration: 1.0, ease: 'power3.out' }, s)
+    master.fromTo(win, { y: 70, z: -260, rotationY: item.tilt || -12, rotationX: 7, autoAlpha: 0 },
+      { y: 0, z: 0, rotationY: 0, rotationX: 0, autoAlpha: 1, duration: 1.1, ease: 'power3.out' }, s)
       .fromTo(sheen, { xPercent: -120 }, { xPercent: 120, duration: 1.3, ease: 'power2.inOut' }, s + 0.6)
       .fromTo(chip, { x: -30, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.5, ease: 'power2.out' }, s + 0.35)
-      .fromTo(caption, { y: 26, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.6, ease: 'power2.out' }, s + 0.55);
+      .fromTo(caption, { y: 26, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.6, ease: 'power2.out' }, s + 0.55)
+      .to(win, { scale: 1.025, rotationY: (item.tilt || -12) > 0 ? -1.5 : 1.5, duration: Math.max(0.1, item.dur - 1.1), ease: 'none' }, s + 1.1);
 
     if (item.stats) {
       const box = make('div', 'stats');
@@ -346,9 +345,12 @@
     const need = narration[item.id] ? LEAD + narration[item.id] + PAD_END : 0;
     if (item.type !== 'clip') { item.dur = Math.max(item.dur, need); return; }
     item.trim = trims[item.clip] ?? TRIM;
-    item.usable = Math.max(2, (durations[item.clip] || 10) - item.trim - TAIL);
-    item.dur = Math.max(item.usable / PLAY_RATE, need);
-    item.rate = PLAY_RATE;
+    const usable = Math.max(2, (durations[item.clip] || 10) - item.trim - TAIL);
+    let dur = Math.max(usable / MAX_RATE, need);
+    let rate = usable / dur;
+    if (rate < MIN_RATE) { rate = MIN_RATE; dur = Math.max(usable / rate, need); }
+    item.dur = dur;
+    item.rate = Math.min(rate, usable / dur);
   }
 
   function build() {
@@ -386,9 +388,9 @@
     updaters.forEach(fn => fn(t));
     for (const clip of clips) {
       if (t >= clip.start && t < clip.start + clip.dur) {
-        // Land in the middle of a recorded frame, and hold the last one when the scene runs longer.
-        const step = Math.min(Math.round((t - clip.start) * clip.rate * SOURCE_FPS), Math.floor(clip.usable * SOURCE_FPS));
-        await seekVideo(clip.video, clip.raw + (step + 0.5) / SOURCE_FPS);
+        const raw = clip.raw + (t - clip.start) * clip.rate;
+        const max = Number.isFinite(clip.video.duration) ? clip.video.duration - 0.05 : Infinity;
+        await seekVideo(clip.video, Math.min(raw, max));
       }
     }
     return true;
