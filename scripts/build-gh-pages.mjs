@@ -394,7 +394,7 @@ function buildRelatedCardsHtml(program, allPrograms) {
             <div class="related-card-body">
               <h3>${escapeHtml(rel.shortTitle || rel.title)}</h3>
               <p class="related-card-meta">${escapeHtml(rel.mode || 'En línea')} · ${escapeHtml(rel.duration || 'Consultar')} · ${escapeHtml(formatUsdTotal(rel.price))}</p>
-              <span class="related-card-cta">Ver ficha 10x →</span>
+              <span class="related-card-cta">Más detalles →</span>
             </div>
           </a>`;
   }).join('\n          ');

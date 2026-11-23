@@ -374,7 +374,7 @@
 
       return `<article class="program-card" data-slug="${escapeHtml(p.slug)}">
         <div class="program-media">
-          <a class="program-media-link" href="${detailUrl}" aria-label="Ver ficha 10x de ${escapeHtml(p.title)}">
+          <a class="program-media-link" href="${detailUrl}" aria-label="Más detalles de ${escapeHtml(p.title)}">
             <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.shortTitle || p.title)}" loading="lazy" decoding="async" width="640" height="360">
           </a>
           <div class="program-badges">
@@ -417,7 +417,7 @@
 
           <div class="program-actions">
             <div class="program-actions-row">
-              <a class="btn btn-primary" href="${detailUrl}">Ver ficha 10x →</a>
+              <a class="btn btn-primary" href="${detailUrl}">Más detalles →</a>
               <button type="button" class="btn btn-ghost-dark" data-select-program="${escapeHtml(p.slug)}">Solicitar info</button>
             </div>
             <div class="program-ext-links">
@@ -783,7 +783,7 @@
           ${entry.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}
         </ul>
         <div class="ori-actions">
-          <a class="btn btn-primary btn-sm" href="${detailUrl}">Ver ficha 10x →</a>
+          <a class="btn btn-primary btn-sm" href="${detailUrl}">Más detalles →</a>
           <button type="button" class="btn btn-ghost-dark btn-sm" data-simulate-slug="${escapeHtml(p.slug)}">Simular cuotas</button>
           <button type="button" class="btn btn-ghost-dark btn-sm" data-select-program="${escapeHtml(p.slug)}">Solicitar info</button>
         </div>
@@ -957,7 +957,7 @@
           ${selected.map((p) => `
             <td>
               <div class="cmp-cell-actions">
-                <a class="btn btn-primary btn-sm" href="${programDetailHref(p.slug)}">Ver ficha 10x →</a>
+                <a class="btn btn-primary btn-sm" href="${programDetailHref(p.slug)}">Más detalles →</a>
                 <button type="button" class="btn btn-ghost-dark btn-sm" data-select-program="${escapeHtml(p.slug)}">Solicitar info</button>
               </div>
             </td>

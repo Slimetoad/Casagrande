@@ -423,7 +423,7 @@ test('correo web envía HTML de marca UCG, confirma detalles enviados, protege P
     simulatorPlan:{tuition:2800,downPayment:560,months:12,monthlyPayment:187}
   });
   env.DB.raw.prepare('INSERT INTO leads(id,name,email,pref_token,source,created_at,updated_at,consent_email,consent_voice,phone,program,context) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
-    .run('lead-web-1','Valeria Cedeño','valeria.cedeno@example.org',token,'Formulario ficha 10x',date,date,1,1,'+593998887766',program.slug,leadContext);
+    .run('lead-web-1','Valeria Cedeño','valeria.cedeno@example.org',token,'Formulario de maestría',date,date,1,1,'+593998887766',program.slug,leadContext);
   env.DB.raw.prepare('INSERT INTO jobs(id,lead_id,channel,kind,status,due_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
     .run('job-web-1','lead-web-1','email','welcome','pending',date,date,date);
 

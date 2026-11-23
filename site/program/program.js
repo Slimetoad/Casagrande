@@ -365,11 +365,11 @@
         email,
         phone: phone || null,
         program: program.slug || null,
-        source: 'Formulario ficha 10x',
+        source: 'Formulario de maestría',
         consentEmail,
         consentVoice,
         context: {
-          page: 'program-10x',
+          page: 'program-detail',
           programTitle: program.title || program.shortTitle || '',
           city: city || null,
           horizon: horizon || null,
