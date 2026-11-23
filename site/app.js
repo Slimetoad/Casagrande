@@ -566,7 +566,7 @@
 
       const selectedProg = state.programBySlug.get(program);
       els.leadSuccessMsg.textContent = data.message ||
-        `Registramos tu solicitud${selectedProg ? ' para ' + selectedProg.shortTitle : ''}. El equipo de Admisiones podrá revisar tu ficha en el CRM.`;
+        `Registramos tu solicitud${selectedProg ? ' para ' + selectedProg.shortTitle : ''}. El equipo de Admisiones podrá revisar tu ficha en Admin.`;
       els.leadSuccess.hidden = false;
       els.leadForm.reset();
       if (els.leadConsentEmail) els.leadConsentEmail.checked = true;

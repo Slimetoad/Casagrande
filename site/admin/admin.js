@@ -2,16 +2,18 @@
   'use strict';
 
   const STAGES = ['Nuevo', 'En orientación', 'En postulación', 'Admitido', 'Matriculado', 'Cerrado'];
+  const SECTIONS = ['crm', 'seo', 'content'];
   const DEFAULT_API_BASE = 'https://casagrande-posgrados-production.up.railway.app';
   const DEFAULT_VOICE_PHONE = '+19124915544';
 
   const state = {
     apiBase: DEFAULT_API_BASE,
     voicePhone: DEFAULT_VOICE_PHONE,
+    activeSection: 'crm',
     programs: [],
     programBySlug: new Map(),
-    view: 'kanban',
-    filters: {
+    crmView: 'kanban',
+    crmFilters: {
       search: '',
       stage: '',
       source: '',
@@ -39,17 +41,42 @@
     drawerTab: 'profile',
     selectedTemplate: '',
     autoRefreshTimer: null,
-    isLoading: false,
-    draggedLeadId: null
+    isLoadingCrm: false,
+    draggedLeadId: null,
+
+    seoDays: 30,
+    seoLoaded: false,
+    seoLoading: false,
+    seoData: null,
+    seoRows: [],
+    seoSelectedIds: new Set(),
+    seoFilters: {
+      search: '',
+      area: '',
+      opportunity: ''
+    },
+
+    contentLoaded: false,
+    contentLoading: false,
+    contentData: null,
+    contentFilters: {
+      search: '',
+      status: ''
+    },
+    studioMode: 'edit',
+    studioProgramSlug: '',
+    studioArticleId: null
   };
 
   const els = {
     healthPill: document.getElementById('health-pill'),
     healthText: document.getElementById('health-text'),
+    refreshAllBtn: document.getElementById('refresh-all-btn'),
+
+    // CRM elements
     newLeadBtn: document.getElementById('new-lead-btn'),
     exportCsvBtn: document.getElementById('export-csv-btn'),
     autoRefreshToggle: document.getElementById('auto-refresh-toggle'),
-    refreshBtn: document.getElementById('refresh-btn'),
     kpiTotal: document.getElementById('kpi-total'),
     kpiRetell: document.getElementById('kpi-retell'),
     kpiVerified: document.getElementById('kpi-verified'),
@@ -57,7 +84,7 @@
     kpiTasks: document.getElementById('kpi-tasks'),
     kpiScore: document.getElementById('kpi-score'),
     stageFunnelPills: document.getElementById('stage-funnel-pills'),
-    syncStatus: document.getElementById('sync-status'),
+    crmSyncStatus: document.getElementById('crm-sync-status'),
     filterSearch: document.getElementById('filter-search'),
     filterStage: document.getElementById('filter-stage'),
     filterSource: document.getElementById('filter-source'),
@@ -67,9 +94,9 @@
     filteredCount: document.getElementById('filtered-count'),
     clearFiltersBtn: document.getElementById('clear-filters-btn'),
     crmError: document.getElementById('crm-error'),
-    viewKanban: document.getElementById('view-kanban'),
-    viewTable: document.getElementById('view-table'),
-    viewActivity: document.getElementById('view-activity'),
+    crmViewKanban: document.getElementById('crm-view-kanban'),
+    crmViewTable: document.getElementById('crm-view-table'),
+    crmViewActivity: document.getElementById('crm-view-activity'),
     kanbanBoard: document.getElementById('kanban-board'),
     tableBody: document.getElementById('table-body'),
     activityCallsCount: document.getElementById('activity-calls-count'),
@@ -77,6 +104,8 @@
     activityEventsCount: document.getElementById('activity-events-count'),
     activityTasksList: document.getElementById('activity-tasks-list'),
     activityEventsList: document.getElementById('activity-events-list'),
+
+    // Drawer & Modal
     drawerBackdrop: document.getElementById('drawer-backdrop'),
     drawer: document.getElementById('candidate-drawer'),
     drawerCloseBtn: document.getElementById('drawer-close-btn'),
@@ -143,6 +172,57 @@
     modalConsentVoice: document.getElementById('modal-consent-voice'),
     modalError: document.getElementById('modal-error'),
     submitNewLead: document.getElementById('submit-new-lead'),
+
+    // SEO Analysis elements
+    seoSyncStatus: document.getElementById('seo-sync-status'),
+    seoRefreshBtn: document.getElementById('seo-refresh-btn'),
+    seoKpiPages: document.getElementById('seo-kpi-pages'),
+    seoKpiVolume: document.getElementById('seo-kpi-volume'),
+    seoKpiCpc: document.getElementById('seo-kpi-cpc'),
+    seoKpiWithVol: document.getElementById('seo-kpi-with-vol'),
+    seoKpiGuides: document.getElementById('seo-kpi-guides'),
+    seoError: document.getElementById('seo-error'),
+    seoSearch: document.getElementById('seo-search'),
+    seoAreaFilter: document.getElementById('seo-area-filter'),
+    seoOpportunityFilter: document.getElementById('seo-opportunity-filter'),
+    seoSelectTopBtn: document.getElementById('seo-select-top-btn'),
+    seoClearSelBtn: document.getElementById('seo-clear-sel-btn'),
+    seoCheckAll: document.getElementById('seo-check-all'),
+    seoTableBody: document.getElementById('seo-table-body'),
+    seoSelectionLabel: document.getElementById('seo-selection-label'),
+    seoAiForm: document.getElementById('seo-ai-form'),
+    seoQuestion: document.getElementById('seo-question'),
+    seoAnalyzeBtn: document.getElementById('seo-analyze-btn'),
+    seoFindingsBox: document.getElementById('seo-findings-box'),
+
+    // Content Engine elements
+    contentWeekPill: document.getElementById('content-week-pill'),
+    contentSyncStatus: document.getElementById('content-sync-status'),
+    contentRefreshBtn: document.getElementById('content-refresh-btn'),
+    contentKpiPlanned: document.getElementById('content-kpi-planned'),
+    contentKpiPublished: document.getElementById('content-kpi-published'),
+    contentKpiDrafts: document.getElementById('content-kpi-drafts'),
+    contentKpiVolume: document.getElementById('content-kpi-volume'),
+    contentError: document.getElementById('content-error'),
+    contentSearch: document.getElementById('content-search'),
+    contentStatusPills: document.getElementById('content-status-pills'),
+    contentPlanList: document.getElementById('content-plan-list'),
+    studioProgram: document.getElementById('studio-program'),
+    studioCatalogFacts: document.getElementById('studio-catalog-facts'),
+    studioKeyword: document.getElementById('studio-keyword'),
+    studioAngle: document.getElementById('studio-angle'),
+    studioGenerateBtn: document.getElementById('studio-generate-btn'),
+    studioEditorForm: document.getElementById('studio-editor-form'),
+    studioEditFields: document.getElementById('studio-edit-fields'),
+    studioPreviewPane: document.getElementById('studio-preview-pane'),
+    studioTitle: document.getElementById('studio-title'),
+    studioSlug: document.getElementById('studio-slug'),
+    studioSummary: document.getElementById('studio-summary'),
+    studioBody: document.getElementById('studio-body'),
+    studioMetaStatus: document.getElementById('studio-meta-status'),
+    studioSaveDraftBtn: document.getElementById('studio-save-draft-btn'),
+    studioPublishBtn: document.getElementById('studio-publish-btn'),
+
     toastContainer: document.getElementById('toast-container')
   };
 
@@ -184,6 +264,21 @@
       timeStyle: 'short',
       timeZone: 'America/Guayaquil'
     }).format(d);
+  }
+
+  function formatInt(n) {
+    if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
+    return new Intl.NumberFormat('es-EC').format(n);
+  }
+
+  function formatUsd(n) {
+    if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
+    return new Intl.NumberFormat('es-EC', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(n);
   }
 
   function toDatetimeLocalValue(iso) {
@@ -240,9 +335,7 @@
   async function resolveConfig() {
     const params = new URLSearchParams(window.location.search);
     const queryApi = sanitizeApiBase(params.get('api') || '');
-    if (queryApi) {
-      state.apiBase = queryApi;
-    }
+    if (queryApi) state.apiBase = queryApi;
 
     const inlineConfigEl = document.getElementById('ucg-config');
     if (inlineConfigEl?.textContent) {
@@ -266,7 +359,7 @@
         if (cfg?.voicePhone) applyVoicePhone(cfg.voicePhone);
       }
     } catch {
-      // Fall back to default API base when config.json cannot be loaded.
+      // Keep default API base when config.json cannot be read locally.
     }
   }
 
@@ -288,7 +381,7 @@
           if (Array.isArray(fetched)) list = fetched;
         }
       } catch {
-        // Leave empty if catalog.json cannot be fetched.
+        // Keep empty if catalog.json cannot be loaded.
       }
     }
 
@@ -302,9 +395,7 @@
     toast.className = `toast ${type === 'err' ? 'is-err' : 'is-ok'}`;
     toast.textContent = message;
     els.toastContainer.appendChild(toast);
-    window.setTimeout(() => {
-      toast.remove();
-    }, 3600);
+    window.setTimeout(() => toast.remove(), 3800);
   }
 
   async function apiRequest(path, options = {}) {
@@ -332,7 +423,7 @@
         els.healthText.textContent = 'Railway · Voz IA y Resend activos';
       } else if (data.dbReady !== false) {
         els.healthPill.className = 'health-pill health-warn';
-        els.healthText.textContent = 'Railway · CRM en línea';
+        els.healthText.textContent = 'Railway · Admin en línea';
       } else {
         throw new Error('Degraded');
       }
@@ -342,6 +433,39 @@
     }
   }
 
+  // ==================== SECTION SWITCHING (#crm, #seo, #content) ====================
+  function sectionFromHash() {
+    const cleanHash = window.location.hash.replace(/^#/, '').toLowerCase();
+    return SECTIONS.includes(cleanHash) ? cleanHash : 'crm';
+  }
+
+  function switchSection(section, updateHash = true) {
+    if (!SECTIONS.includes(section)) return;
+    state.activeSection = section;
+
+    document.querySelectorAll('[data-section]').forEach((btn) => {
+      const active = btn.dataset.section === section;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', String(active));
+    });
+
+    SECTIONS.forEach((name) => {
+      const panel = document.getElementById(`section-${name}`);
+      if (panel) panel.hidden = name !== section;
+    });
+
+    if (updateHash && window.location.hash !== `#${section}`) {
+      window.history.replaceState(null, '', `#${section}`);
+    }
+
+    if (section === 'seo' && !state.seoLoaded) {
+      loadSeo();
+    } else if (section === 'content' && !state.contentLoaded) {
+      loadContent();
+    }
+  }
+
+  // ==================== SECTION 1: CRM ====================
   function enrichLead(lead) {
     const ctx = parseJsonSafe(lead.context, {});
     const leadConvs = state.crm.conversations.filter((c) => c.lead_id === lead.id);
@@ -424,8 +548,8 @@
 
   function getFilteredLeads() {
     const enriched = state.crm.leads.map(enrichLead);
-    const q = normalizeText(state.filters.search);
-    const { stage, source, area, verification, sort } = state.filters;
+    const q = normalizeText(state.crmFilters.search);
+    const { stage, source, area, verification, sort } = state.crmFilters;
 
     const filtered = enriched.filter((lead) => {
       if (stage && lead.stage !== stage) return false;
@@ -505,20 +629,20 @@
 
     if (els.stageFunnelPills) {
       els.stageFunnelPills.innerHTML = [
-        `<button type="button" class="funnel-pill${state.filters.stage === '' ? ' is-active' : ''}" data-funnel-stage="">Todas <span>${totalAll}</span></button>`,
+        `<button type="button" class="funnel-pill${state.crmFilters.stage === '' ? ' is-active' : ''}" data-funnel-stage="">Todas <span>${totalAll}</span></button>`,
         ...STAGES.map((stage) => {
           const count = stageCounts[stage] ?? state.crm.leads.filter((l) => l.stage === stage).length;
-          return `<button type="button" class="funnel-pill${state.filters.stage === stage ? ' is-active' : ''}" data-funnel-stage="${escapeHtml(stage)}">${escapeHtml(stage)} <span>${count}</span></button>`;
+          return `<button type="button" class="funnel-pill${state.crmFilters.stage === stage ? ' is-active' : ''}" data-funnel-stage="${escapeHtml(stage)}">${escapeHtml(stage)} <span>${count}</span></button>`;
         })
       ].join('');
     }
 
     const hasFilters = Boolean(
-      state.filters.search ||
-      state.filters.stage ||
-      state.filters.source ||
-      state.filters.area ||
-      state.filters.verification
+      state.crmFilters.search ||
+      state.crmFilters.stage ||
+      state.crmFilters.source ||
+      state.crmFilters.area ||
+      state.crmFilters.verification
     );
     if (els.filteredCount) {
       els.filteredCount.textContent = `${filteredCount} ${filteredCount === 1 ? 'aspirante' : 'aspirantes'}`;
@@ -697,7 +821,7 @@
     }
   }
 
-  function renderAllViews() {
+  function renderCrmAllViews() {
     const filtered = getFilteredLeads();
     renderKpisAndFunnel(filtered.length);
     renderKanban(filtered);
@@ -720,7 +844,7 @@
     const priceText = prog && typeof prog.price === 'number' && prog.price > 0
       ? `$${new Intl.NumberFormat('es-EC').format(prog.price)} USD`
       : 'consultar directamente con Admisiones';
-    const basePortal = window.location.origin + window.location.pathname.replace(/\/crm\/?.*$/, '');
+    const basePortal = window.location.origin + window.location.pathname.replace(/\/admin\/?.*$/, '');
     const citaUrl = `${basePortal}/#cita`;
 
     if (templateKey === 'resumen') {
@@ -970,9 +1094,9 @@
   }
 
   async function loadCrm(silent = false) {
-    if (state.isLoading) return;
-    state.isLoading = true;
-    if (!silent && els.syncStatus) els.syncStatus.textContent = 'Actualizando CRM…';
+    if (state.isLoadingCrm) return;
+    state.isLoadingCrm = true;
+    if (!silent && els.crmSyncStatus) els.crmSyncStatus.textContent = 'Actualizando CRM…';
     if (els.crmError) els.crmError.hidden = true;
 
     try {
@@ -985,18 +1109,18 @@
         nurtureJobs: Array.isArray(data.nurtureJobs) ? data.nurtureJobs : [],
         stats: data.stats || {}
       };
-      renderAllViews();
-      if (els.syncStatus) {
-        els.syncStatus.textContent = `Actualizado: ${formatDateEc(new Date().toISOString())}`;
+      renderCrmAllViews();
+      if (els.crmSyncStatus) {
+        els.crmSyncStatus.textContent = `Actualizado: ${formatDateEc(new Date().toISOString())}`;
       }
     } catch (err) {
       if (els.crmError) {
         els.crmError.textContent = `Error al cargar el CRM (${err.message}).`;
         els.crmError.hidden = false;
       }
-      if (els.syncStatus) els.syncStatus.textContent = 'Error de sincronización';
+      if (els.crmSyncStatus) els.crmSyncStatus.textContent = 'Error de sincronización';
     } finally {
-      state.isLoading = false;
+      state.isLoadingCrm = false;
     }
   }
 
@@ -1012,7 +1136,7 @@
       await loadCrm(true);
     } catch (err) {
       showToast(`No se pudo mover la etapa: ${err.message}`, 'err');
-      renderAllViews();
+      renderCrmAllViews();
     }
   }
 
@@ -1081,21 +1205,538 @@
     showToast(`Exportados ${rows.length} expedientes a CSV`);
   }
 
+  // ==================== SECTION 2: SEO ANALYSIS ====================
+  function buildMergedSeoRows(data) {
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    const marketList = Array.isArray(data?.marketResearch) ? data.marketResearch : [];
+    const marketByProgram = new Map(marketList.map((m) => [m.program, m]));
+    const publishedGuidePrograms = new Set(rows.filter((r) => r.kind === 'guia').map((r) => r.program));
+
+    return rows.map((row) => {
+      const prog = state.programBySlug.get(row.program) || null;
+      const market = marketByProgram.get(row.program) || null;
+      const metrics = row.metrics || {};
+
+      const volume = metrics.searchVolume ?? market?.volume ?? null;
+      const cpc = metrics.cpc ?? market?.cpc ?? null;
+      const competition = metrics.competition ?? market?.competition ?? null;
+      const difficulty = metrics.keywordDifficulty ?? market?.difficulty ?? null;
+      const keyword = row.keyword || market?.keyword || '';
+      const intent = market?.intent || '';
+
+      return {
+        ...row,
+        area: prog?.area || '',
+        shortTitle: prog?.shortTitle || row.title,
+        keyword,
+        intent,
+        volume,
+        cpc,
+        competition,
+        difficulty,
+        hasGuide: row.kind === 'guia' || publishedGuidePrograms.has(row.program),
+        views: metrics.views,
+        ctaClicks: metrics.ctaClicks,
+        leads: metrics.leads
+      };
+    });
+  }
+
+  function getFilteredSeoRows() {
+    const q = normalizeText(state.seoFilters.search);
+    const { area, opportunity } = state.seoFilters;
+
+    return state.seoRows.filter((row) => {
+      if (area && row.area !== area) return false;
+      if (opportunity === 'volume' && !(typeof row.volume === 'number' && row.volume > 0)) return false;
+      if (opportunity === 'no_guide' && row.hasGuide) return false;
+      if (opportunity === 'high_cpc' && !(typeof row.cpc === 'number' && row.cpc >= 4)) return false;
+      if (opportunity === 'portal_activity' && !((row.views || 0) > 0 || (row.leads || 0) > 0)) return false;
+      if (!q) return true;
+      const haystack = normalizeText([row.title, row.shortTitle, row.program, row.keyword, row.area].join(' '));
+      return haystack.includes(q);
+    });
+  }
+
+  function renderSeoSection() {
+    if (!state.seoData) return;
+    const rows = state.seoRows;
+    const summary = state.seoData.summary || {};
+
+    const progRows = rows.filter((r) => r.kind === 'programa');
+    const guideRows = rows.filter((r) => r.kind === 'guia');
+    const withVolCount = summary.programsWithVolume > 0
+      ? summary.programsWithVolume
+      : progRows.filter((r) => typeof r.volume === 'number' && r.volume > 0).length;
+    const totalVol = summary.totalMonthlyVolume > 0
+      ? summary.totalMonthlyVolume
+      : progRows.reduce((s, r) => s + (typeof r.volume === 'number' ? r.volume : 0), 0);
+    const cpcList = progRows.map((r) => r.cpc).filter((v) => typeof v === 'number' && v > 0);
+    const avgCpc = summary.avgCpcUsd > 0
+      ? summary.avgCpcUsd
+      : (cpcList.length ? cpcList.reduce((a, b) => a + b, 0) / cpcList.length : 0);
+
+    if (els.seoKpiPages) els.seoKpiPages.textContent = String(summary.totalPages ?? rows.length);
+    if (els.seoKpiVolume) els.seoKpiVolume.textContent = formatInt(totalVol);
+    if (els.seoKpiCpc) els.seoKpiCpc.textContent = avgCpc > 0 ? formatUsd(avgCpc) : '—';
+    if (els.seoKpiWithVol) els.seoKpiWithVol.textContent = String(withVolCount);
+    if (els.seoKpiGuides) els.seoKpiGuides.textContent = String(summary.publishedGuides ?? guideRows.length);
+
+    const visible = getFilteredSeoRows();
+    const selCount = state.seoSelectedIds.size;
+
+    if (els.seoClearSelBtn) els.seoClearSelBtn.hidden = selCount === 0;
+    if (els.seoSelectionLabel) {
+      els.seoSelectionLabel.textContent = selCount
+        ? `${selCount} ${selCount === 1 ? 'página seleccionada' : 'páginas seleccionadas'} para análisis con IA.`
+        : 'Sin filas marcadas: se analizarán las páginas con evidencia disponible.';
+    }
+
+    if (els.seoCheckAll) {
+      els.seoCheckAll.checked = visible.length > 0 && visible.every((r) => state.seoSelectedIds.has(r.id));
+    }
+
+    if (!els.seoTableBody) return;
+    if (!visible.length) {
+      els.seoTableBody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:#526071;">No hay filas SEO que coincidan con el filtro.</td></tr>';
+      return;
+    }
+
+    els.seoTableBody.innerHTML = visible.map((row) => {
+      const checked = state.seoSelectedIds.has(row.id);
+      const compPct = typeof row.competition === 'number' ? `${Math.round(row.competition * 100)}%` : '—';
+      const diffTxt = typeof row.difficulty === 'number' ? `KD ${row.difficulty}` : 'KD —';
+      const viewsTxt = row.views !== null && row.views !== undefined ? formatInt(row.views) : '0';
+      const leadsTxt = row.leads !== null && row.leads !== undefined ? formatInt(row.leads) : '0';
+
+      return `
+        <tr>
+          <td class="col-check">
+            <input type="checkbox" data-seo-select="${escapeHtml(row.id)}"${checked ? ' checked' : ''} aria-label="Seleccionar ${escapeHtml(row.shortTitle)}">
+          </td>
+          <td>
+            <div class="table-name">${escapeHtml(row.shortTitle)}</div>
+            <div class="table-sub">
+              <span class="badge ${row.kind === 'guia' ? 'badge-ok' : 'badge-web'}">${row.kind === 'guia' ? 'Guía' : 'Programa'}</span>
+              ${row.area ? ` · ${escapeHtml(row.area)}` : ''}
+            </div>
+          </td>
+          <td>
+            <div>${escapeHtml(row.keyword || 'Sin término asignado')}</div>
+            ${row.source ? `<div class="table-sub">${escapeHtml(row.source)}</div>` : ''}
+          </td>
+          <td><strong>${row.volume !== null ? formatInt(row.volume) : '—'}</strong></td>
+          <td>${row.cpc !== null ? formatUsd(row.cpc) : '—'}</td>
+          <td>
+            <div>${escapeHtml(compPct)}</div>
+            <div class="table-sub">${escapeHtml(diffTxt)}</div>
+          </td>
+          <td>${row.intent ? `<span class="badge badge-neutral">${escapeHtml(row.intent)}</span>` : '—'}</td>
+          <td>
+            <div>${viewsTxt} vistas</div>
+            <div class="table-sub">${leadsTxt} leads</div>
+          </td>
+          <td>
+            ${row.hasGuide
+              ? '<span class="badge badge-ok">Guía activa</span>'
+              : `<button type="button" class="text-btn" data-seo-to-content="${escapeHtml(row.program)}">Crear guía →</button>`}
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  async function loadSeo(days = state.seoDays) {
+    if (state.seoLoading) return;
+    state.seoLoading = true;
+    state.seoDays = days;
+    if (els.seoSyncStatus) els.seoSyncStatus.textContent = 'Consultando evidencia SEO…';
+    if (els.seoError) els.seoError.hidden = true;
+
+    document.querySelectorAll('[data-seo-days]').forEach((btn) => {
+      btn.classList.toggle('is-active', Number(btn.dataset.seoDays) === days);
+    });
+
+    try {
+      const data = await apiRequest(`/api/public/admin/seo?days=${days}`);
+      state.seoData = data;
+      state.seoRows = buildMergedSeoRows(data);
+      state.seoLoaded = true;
+      renderSeoSection();
+      if (els.seoSyncStatus) {
+        els.seoSyncStatus.textContent = `Ventana ${data.start} a ${data.end} · ${state.seoRows.length} páginas`;
+      }
+    } catch (err) {
+      if (els.seoError) {
+        els.seoError.textContent = `No pudimos cargar el análisis SEO (${err.message}).`;
+        els.seoError.hidden = false;
+      }
+      if (els.seoSyncStatus) els.seoSyncStatus.textContent = 'Error al cargar SEO';
+    } finally {
+      state.seoLoading = false;
+    }
+  }
+
+  async function runSeoAnalysis(event) {
+    event?.preventDefault();
+    if (!els.seoFindingsBox) return;
+    const question = els.seoQuestion.value.trim();
+    const ids = [...state.seoSelectedIds].slice(0, 100);
+    const prev = els.seoAnalyzeBtn.textContent;
+    els.seoAnalyzeBtn.disabled = true;
+    els.seoAnalyzeBtn.textContent = 'Analizando evidencia…';
+
+    try {
+      const res = await apiRequest('/api/public/admin/seo/analyze', {
+        method: 'POST',
+        body: JSON.stringify({
+          days: state.seoDays,
+          ids,
+          question
+        })
+      });
+
+      const findings = Array.isArray(res.findings) ? res.findings : [];
+      const modeBadge = res.mode === 'modelo'
+        ? '<span class="badge badge-ok">Diagnóstico Claude IA</span>'
+        : '<span class="badge badge-warn">Resumen descriptivo verificado</span>';
+
+      if (!findings.length) {
+        els.seoFindingsBox.innerHTML = `${modeBadge}<div class="kanban-empty">No se encontraron suficientes métricas registradas para responder esa pregunta en la selección actual.</div>`;
+        return;
+      }
+
+      els.seoFindingsBox.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
+          ${modeBadge}
+          <span class="table-sub">${res.start || ''} a ${res.end || ''}</span>
+        </div>
+        ${findings.map((f) => `
+          <article class="finding-card">
+            <h3>${escapeHtml(f.title)}</h3>
+            <p>${escapeHtml(f.interpretation)}</p>
+            ${f.nextStep ? `<div class="finding-next">Siguiente paso: ${escapeHtml(f.nextStep)}</div>` : ''}
+            ${Array.isArray(f.references) && f.references.length ? `<div class="finding-refs">
+              ${f.references.map((ref) => `<span>• ${escapeHtml(ref.statement || `${ref.id} (${ref.metric})`)}</span>`).join('')}
+            </div>` : ''}
+          </article>
+        `).join('')}
+      `;
+    } catch (err) {
+      els.seoFindingsBox.innerHTML = `<div class="alert-banner alert-error">${escapeHtml(err.message)}</div>`;
+    } finally {
+      els.seoAnalyzeBtn.disabled = false;
+      els.seoAnalyzeBtn.textContent = prev;
+    }
+  }
+
+  // ==================== SECTION 3: CONTENT ENGINE ====================
+  function statusBadgeForPlan(status) {
+    if (status === 'published') return '<span class="badge badge-ok">Publicado</span>';
+    if (status === 'draft') return '<span class="badge badge-warn">Borrador</span>';
+    return '<span class="badge badge-neutral">Planificado</span>';
+  }
+
+  function renderStudioPreview() {
+    if (!els.studioPreviewPane) return;
+    const title = els.studioTitle.value.trim() || 'Título de la guía';
+    const summary = els.studioSummary.value.trim();
+    const blocks = (els.studioBody.value || '')
+      .split(/\n\s*\n/)
+      .map((b) => b.trim())
+      .filter(Boolean);
+
+    const bodyHtml = blocks.length
+      ? blocks.map((block) => {
+        const lines = block.split('\n');
+        const first = lines[0].trim();
+        if (lines.length > 1 && first.length <= 100) {
+          return `<h4>${escapeHtml(first)}</h4><p>${escapeHtml(lines.slice(1).join(' '))}</p>`;
+        }
+        return `<p>${escapeHtml(block)}</p>`;
+      }).join('')
+      : '<p><em>Sin contenido aún. Haz clic en "✨ Generar borrador con IA" para crear una propuesta grounded en el catálogo UCG.</em></p>';
+
+    els.studioPreviewPane.innerHTML = `
+      <h3>${escapeHtml(title)}</h3>
+      ${summary ? `<p class="preview-deck">${escapeHtml(summary)}</p>` : ''}
+      ${bodyHtml}
+    `;
+  }
+
+  function setStudioMode(mode) {
+    state.studioMode = mode;
+    document.querySelectorAll('[data-studio-mode]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.studioMode === mode);
+    });
+    if (mode === 'preview') {
+      renderStudioPreview();
+      els.studioEditFields.hidden = true;
+      els.studioPreviewPane.hidden = false;
+    } else {
+      els.studioEditFields.hidden = false;
+      els.studioPreviewPane.hidden = true;
+    }
+  }
+
+  function selectStudioProgram(slug, autoSwitchTab = false) {
+    const prog = state.programBySlug.get(slug) || state.programs[0];
+    if (!prog) return;
+    state.studioProgramSlug = prog.slug;
+    if (els.studioProgram) els.studioProgram.value = prog.slug;
+
+    const plan = Array.isArray(state.contentData?.plan) ? state.contentData.plan : [];
+    const planItem = plan.find((p) => p.program === prog.slug) || null;
+    const articles = Array.isArray(state.contentData?.articles) ? state.contentData.articles : [];
+    const article = articles.find((a) => a.program === prog.slug) || null;
+
+    state.studioArticleId = article?.id || planItem?.articleId || null;
+
+    const priceLabel = typeof prog.price === 'number' && prog.price > 0
+      ? formatUsd(prog.price)
+      : 'Consultar con Admisiones';
+    if (els.studioCatalogFacts) {
+      els.studioCatalogFacts.innerHTML = `
+        <span><strong>Área:</strong> ${escapeHtml(prog.area)}</span>
+        <span><strong>Modalidad:</strong> ${escapeHtml(prog.mode || 'En línea')}</span>
+        <span><strong>Duración:</strong> ${escapeHtml(prog.duration || 'Consultar')}</span>
+        <span><strong>Inversión:</strong> ${escapeHtml(priceLabel)}</span>
+      `;
+    }
+
+    if (els.studioKeyword) {
+      els.studioKeyword.value = article?.sourceQuery || planItem?.keyword || planItem?.searchQuestion || '';
+    }
+    if (els.studioTitle) {
+      els.studioTitle.value = article?.title || planItem?.title || `Guía: ${prog.title}`;
+    }
+    if (els.studioSlug) {
+      els.studioSlug.value = article?.slug || planItem?.articleSlug || `guia-${prog.slug}`;
+    }
+    if (els.studioSummary) {
+      els.studioSummary.value = article?.summary || planItem?.summary || prog.summary || '';
+    }
+    if (els.studioBody) {
+      els.studioBody.value = article?.body || planItem?.body || '';
+    }
+
+    if (els.studioMetaStatus) {
+      if (article?.status === 'published') {
+        els.studioMetaStatus.textContent = `Publicada el ${formatDateEc(article.publishedAt || article.updatedAt)}`;
+      } else if (article?.status === 'draft' || planItem?.status === 'draft') {
+        els.studioMetaStatus.textContent = `Borrador guardado (${formatDateEc(article?.updatedAt || planItem?.updatedAt)})`;
+      } else {
+        els.studioMetaStatus.textContent = 'Sin borrador guardado aún — genera uno con IA.';
+      }
+    }
+
+    if (state.studioMode === 'preview') {
+      renderStudioPreview();
+    }
+
+    renderContentQueue();
+
+    if (autoSwitchTab) {
+      switchSection('content');
+    }
+  }
+
+  function renderContentQueue() {
+    if (!state.contentData) return;
+    const stats = state.contentData.stats || {};
+    const plan = Array.isArray(state.contentData.plan) ? state.contentData.plan : [];
+
+    if (els.contentWeekPill) {
+      els.contentWeekPill.textContent = state.contentData.week ? `Semana ${state.contentData.week}` : 'Plan activo';
+    }
+    if (els.contentKpiPlanned) els.contentKpiPlanned.textContent = String(stats.plannedPrograms ?? plan.length);
+    if (els.contentKpiPublished) els.contentKpiPublished.textContent = String(stats.publishedGuides ?? 0);
+    if (els.contentKpiDrafts) els.contentKpiDrafts.textContent = String(stats.draftGuides ?? 0);
+    if (els.contentKpiVolume) els.contentKpiVolume.textContent = formatInt(stats.coveredVolume ?? 0);
+
+    document.querySelectorAll('[data-content-status]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.contentStatus === state.contentFilters.status);
+    });
+
+    const q = normalizeText(state.contentFilters.search);
+    const statusFilter = state.contentFilters.status;
+
+    const visible = plan.filter((item) => {
+      if (statusFilter && item.status !== statusFilter) return false;
+      if (!q) return true;
+      const haystack = normalizeText([
+        item.programTitle,
+        item.shortTitle,
+        item.program,
+        item.area,
+        item.cluster,
+        item.keyword,
+        item.title
+      ].join(' '));
+      return haystack.includes(q);
+    });
+
+    if (!els.contentPlanList) return;
+    if (!visible.length) {
+      els.contentPlanList.innerHTML = '<div class="kanban-empty">No hay programas con ese estado o búsqueda.</div>';
+      return;
+    }
+
+    els.contentPlanList.innerHTML = visible.map((item) => {
+      const selected = item.program === state.studioProgramSlug;
+      return `
+        <article class="plan-item${selected ? ' is-selected' : ''}" data-plan-program="${escapeHtml(item.program)}">
+          <div class="plan-item-top">
+            <div>
+              <h3>${escapeHtml(item.shortTitle || item.programTitle)}</h3>
+              <div class="plan-item-meta">
+                <span>${escapeHtml(item.area || item.cluster || 'Posgrado')}</span>
+                ${item.intent ? `<span>Intención: ${escapeHtml(item.intent)}</span>` : ''}
+                <span>Prioridad: <strong>${escapeHtml(item.priority)}</strong></span>
+              </div>
+            </div>
+            ${statusBadgeForPlan(item.status)}
+          </div>
+          <div class="plan-item-meta">
+            <span>Keyword EC: <strong>${escapeHtml(item.keyword || item.searchQuestion || '—')}</strong></span>
+            <span>Volumen: <strong>${item.volume !== null && item.volume !== undefined ? formatInt(item.volume) : '—'}</strong></span>
+          </div>
+          <div class="plan-item-actions">
+            <button type="button" class="btn btn-ai btn-sm" data-quick-draft="${escapeHtml(item.program)}">✨ Generar borrador</button>
+            <button type="button" class="btn btn-outline btn-sm" data-open-studio="${escapeHtml(item.program)}">Editar estudio</button>
+          </div>
+        </article>
+      `;
+    }).join('');
+  }
+
+  async function loadContent(keepSelection = true) {
+    if (state.contentLoading) return;
+    state.contentLoading = true;
+    if (els.contentSyncStatus) els.contentSyncStatus.textContent = 'Cargando plan editorial…';
+    if (els.contentError) els.contentError.hidden = true;
+
+    try {
+      const data = await apiRequest('/api/public/admin/content');
+      state.contentData = data;
+      state.contentLoaded = true;
+      if (!keepSelection || !state.studioProgramSlug) {
+        const firstProg = data.plan?.[0]?.program || state.programs[0]?.slug || '';
+        if (firstProg) selectStudioProgram(firstProg, false);
+      } else {
+        selectStudioProgram(state.studioProgramSlug, false);
+      }
+      renderContentQueue();
+      if (els.contentSyncStatus) {
+        els.contentSyncStatus.textContent = `Actualizado: ${formatDateEc(new Date().toISOString())}`;
+      }
+    } catch (err) {
+      if (els.contentError) {
+        els.contentError.textContent = `No pudimos cargar el motor de contenidos (${err.message}).`;
+        els.contentError.hidden = false;
+      }
+      if (els.contentSyncStatus) els.contentSyncStatus.textContent = 'Error al cargar plan';
+    } finally {
+      state.contentLoading = false;
+    }
+  }
+
+  async function generateStudioDraft(programSlug = state.studioProgramSlug) {
+    if (!programSlug) return;
+    if (programSlug !== state.studioProgramSlug) {
+      selectStudioProgram(programSlug, false);
+    }
+    const prev = els.studioGenerateBtn.textContent;
+    els.studioGenerateBtn.disabled = true;
+    els.studioGenerateBtn.textContent = 'Generando borrador con IA…';
+
+    try {
+      const res = await apiRequest('/api/public/admin/content/draft', {
+        method: 'POST',
+        body: JSON.stringify({
+          programSlug,
+          keyword: els.studioKeyword.value.trim(),
+          customAngle: els.studioAngle.value.trim()
+        })
+      });
+
+      const art = res.article || {};
+      state.studioArticleId = art.id || state.studioArticleId;
+      els.studioTitle.value = art.title || els.studioTitle.value;
+      els.studioSlug.value = art.slug || els.studioSlug.value;
+      els.studioSummary.value = art.summary || els.studioSummary.value;
+      els.studioBody.value = art.body || els.studioBody.value;
+      if (state.studioMode === 'preview') renderStudioPreview();
+
+      showToast(res.source === 'anthropic' ? 'Borrador generado con Claude IA' : 'Borrador generado con plantilla UCG');
+      await loadContent(true);
+    } catch (err) {
+      showToast(`Error al generar borrador: ${err.message}`, 'err');
+    } finally {
+      els.studioGenerateBtn.disabled = false;
+      els.studioGenerateBtn.textContent = prev;
+    }
+  }
+
+  async function saveStudioArticle(status) {
+    const programSlug = els.studioProgram.value;
+    const title = els.studioTitle.value.trim();
+    const slug = els.studioSlug.value.trim().toLowerCase();
+    const summary = els.studioSummary.value.trim();
+    const body = els.studioBody.value.trim();
+
+    if (title.length < 5 || summary.length < 10 || body.length < 40) {
+      showToast('Completa título (min 5), resumen (min 10) y cuerpo (min 40).', 'err');
+      return;
+    }
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      showToast('El slug debe usar solo letras minúsculas, números y guiones.', 'err');
+      return;
+    }
+
+    els.studioSaveDraftBtn.disabled = true;
+    els.studioPublishBtn.disabled = true;
+    try {
+      const res = await apiRequest('/api/public/admin/content/publish', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: state.studioArticleId || undefined,
+          programSlug,
+          slug,
+          title,
+          summary,
+          body,
+          status
+        })
+      });
+      state.studioArticleId = res.article?.id || state.studioArticleId;
+      showToast(status === 'published' ? 'Guía publicada correctamente' : 'Borrador guardado');
+      await loadContent(true);
+    } catch (err) {
+      showToast(`Error al guardar: ${err.message}`, 'err');
+    } finally {
+      els.studioSaveDraftBtn.disabled = false;
+      els.studioPublishBtn.disabled = false;
+    }
+  }
+
+  // ==================== SHARED INIT & EVENT BINDING ====================
   function populateSelects() {
     const areas = [...new Set(state.programs.map((p) => p.area).filter(Boolean))];
     const stageOptions = STAGES.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
     const programOptions = state.programs
       .map((p) => `<option value="${escapeHtml(p.slug)}">${escapeHtml(p.title)} (${escapeHtml(p.area)})</option>`)
       .join('');
+    const areaOptions = '<option value="">Todas las áreas</option>' +
+      areas.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
 
     if (els.filterStage) els.filterStage.innerHTML = '<option value="">Todas las etapas</option>' + stageOptions;
-    if (els.filterArea) {
-      els.filterArea.innerHTML = '<option value="">Todas las áreas</option>' +
-        areas.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
-    }
+    if (els.filterArea) els.filterArea.innerHTML = areaOptions;
+    if (els.seoAreaFilter) els.seoAreaFilter.innerHTML = areaOptions;
     if (els.editStage) els.editStage.innerHTML = stageOptions;
     if (els.editProgram) els.editProgram.innerHTML = '<option value="">Orientación general de posgrados</option>' + programOptions;
     if (els.modalProgram) els.modalProgram.innerHTML = '<option value="">Orientación general de posgrados</option>' + programOptions;
+    if (els.studioProgram) els.studioProgram.innerHTML = programOptions;
   }
 
   function setupAutoRefresh() {
@@ -1105,7 +1746,7 @@
     }
     if (els.autoRefreshToggle?.checked) {
       state.autoRefreshTimer = window.setInterval(() => {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState === 'visible' && state.activeSection === 'crm') {
           loadCrm(true);
         }
       }, 15000);
@@ -1113,24 +1754,36 @@
   }
 
   function bindEvents() {
-    document.querySelectorAll('[data-view]').forEach((btn) => {
+    document.querySelectorAll('[data-section]').forEach((btn) => {
+      btn.addEventListener('click', () => switchSection(btn.dataset.section, true));
+    });
+
+    window.addEventListener('hashchange', () => {
+      switchSection(sectionFromHash(), false);
+    });
+
+    els.refreshAllBtn?.addEventListener('click', () => {
+      checkHealth();
+      if (state.activeSection === 'crm') loadCrm();
+      else if (state.activeSection === 'seo') loadSeo(state.seoDays);
+      else if (state.activeSection === 'content') loadContent(true);
+    });
+
+    // CRM events
+    document.querySelectorAll('[data-crm-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.view = btn.dataset.view;
-        document.querySelectorAll('[data-view]').forEach((b) => {
+        state.crmView = btn.dataset.crmView;
+        document.querySelectorAll('[data-crm-view]').forEach((b) => {
           const active = b === btn;
           b.classList.toggle('is-active', active);
           b.setAttribute('aria-selected', String(active));
         });
-        els.viewKanban.hidden = state.view !== 'kanban';
-        els.viewTable.hidden = state.view !== 'table';
-        els.viewActivity.hidden = state.view !== 'activity';
+        els.crmViewKanban.hidden = state.crmView !== 'kanban';
+        els.crmViewTable.hidden = state.crmView !== 'table';
+        els.crmViewActivity.hidden = state.crmView !== 'activity';
       });
     });
 
-    els.refreshBtn?.addEventListener('click', () => {
-      checkHealth();
-      loadCrm();
-    });
     els.autoRefreshToggle?.addEventListener('change', setupAutoRefresh);
     els.exportCsvBtn?.addEventListener('click', exportCsv);
     els.newLeadBtn?.addEventListener('click', openNewLeadModal);
@@ -1141,58 +1794,55 @@
     els.stageFunnelPills?.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-funnel-stage]');
       if (!btn) return;
-      state.filters.stage = btn.dataset.funnelStage || '';
-      if (els.filterStage) els.filterStage.value = state.filters.stage;
-      renderAllViews();
+      state.crmFilters.stage = btn.dataset.funnelStage || '';
+      if (els.filterStage) els.filterStage.value = state.crmFilters.stage;
+      renderCrmAllViews();
     });
 
     els.filterSearch?.addEventListener('input', (e) => {
-      state.filters.search = e.target.value;
-      renderAllViews();
+      state.crmFilters.search = e.target.value;
+      renderCrmAllViews();
     });
     els.filterStage?.addEventListener('change', (e) => {
-      state.filters.stage = e.target.value;
-      renderAllViews();
+      state.crmFilters.stage = e.target.value;
+      renderCrmAllViews();
     });
     els.filterSource?.addEventListener('change', (e) => {
-      state.filters.source = e.target.value;
-      renderAllViews();
+      state.crmFilters.source = e.target.value;
+      renderCrmAllViews();
     });
     els.filterArea?.addEventListener('change', (e) => {
-      state.filters.area = e.target.value;
-      renderAllViews();
+      state.crmFilters.area = e.target.value;
+      renderCrmAllViews();
     });
     els.filterVerification?.addEventListener('change', (e) => {
-      state.filters.verification = e.target.value;
-      renderAllViews();
+      state.crmFilters.verification = e.target.value;
+      renderCrmAllViews();
     });
     els.filterSort?.addEventListener('change', (e) => {
-      state.filters.sort = e.target.value;
-      renderAllViews();
+      state.crmFilters.sort = e.target.value;
+      renderCrmAllViews();
     });
 
     els.clearFiltersBtn?.addEventListener('click', () => {
-      state.filters = { search: '', stage: '', source: '', area: '', verification: '', sort: state.filters.sort };
+      state.crmFilters = { search: '', stage: '', source: '', area: '', verification: '', sort: state.crmFilters.sort };
       els.filterSearch.value = '';
       els.filterStage.value = '';
       els.filterSource.value = '';
       els.filterArea.value = '';
       els.filterVerification.value = '';
-      renderAllViews();
+      renderCrmAllViews();
     });
 
-    // Kanban click, quick-move, and drag-and-drop
     els.kanbanBoard?.addEventListener('click', (e) => {
       if (e.target.closest('[data-move-lead]')) return;
       const card = e.target.closest('[data-lead-id]');
       if (card) openDrawer(card.dataset.leadId);
     });
-
     els.kanbanBoard?.addEventListener('change', (e) => {
       const select = e.target.closest('[data-move-lead]');
       if (select) moveLeadStage(select.dataset.moveLead, select.value);
     });
-
     els.kanbanBoard?.addEventListener('dragstart', (e) => {
       const card = e.target.closest('[data-lead-id]');
       if (!card) return;
@@ -1201,28 +1851,22 @@
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', state.draggedLeadId);
     });
-
     els.kanbanBoard?.addEventListener('dragend', (e) => {
       const card = e.target.closest('[data-lead-id]');
       if (card) card.classList.remove('is-dragging');
       state.draggedLeadId = null;
       els.kanbanBoard.querySelectorAll('.kanban-col').forEach((c) => c.classList.remove('is-drag-over'));
     });
-
     els.kanbanBoard?.addEventListener('dragover', (e) => {
       const col = e.target.closest('[data-stage-col]');
       if (!col) return;
       e.preventDefault();
       col.classList.add('is-drag-over');
     });
-
     els.kanbanBoard?.addEventListener('dragleave', (e) => {
       const col = e.target.closest('[data-stage-col]');
-      if (col && !col.contains(e.relatedTarget)) {
-        col.classList.remove('is-drag-over');
-      }
+      if (col && !col.contains(e.relatedTarget)) col.classList.remove('is-drag-over');
     });
-
     els.kanbanBoard?.addEventListener('drop', (e) => {
       const col = e.target.closest('[data-stage-col]');
       if (!col) return;
@@ -1230,38 +1874,31 @@
       col.classList.remove('is-drag-over');
       const leadId = state.draggedLeadId || e.dataTransfer.getData('text/plain');
       const stage = col.dataset.stageCol;
-      if (leadId && stage) {
-        moveLeadStage(leadId, stage);
-      }
+      if (leadId && stage) moveLeadStage(leadId, stage);
     });
 
-    // Table click & stage move
-    els.tableBody?.addEventListener('click', (e) => {
+    els.crmViewTable?.addEventListener('click', (e) => {
       if (e.target.closest('[data-move-lead]')) return;
       const row = e.target.closest('tr[data-lead-id]');
       if (row) openDrawer(row.dataset.leadId);
     });
-
-    els.tableBody?.addEventListener('change', (e) => {
+    els.crmViewTable?.addEventListener('change', (e) => {
       const select = e.target.closest('[data-move-lead]');
       if (select) moveLeadStage(select.dataset.moveLead, select.value);
     });
 
-    // Activity view actions
-    els.viewActivity?.addEventListener('click', (e) => {
+    els.crmViewActivity?.addEventListener('click', (e) => {
       const openBtn = e.target.closest('[data-open-lead]');
       if (openBtn) openDrawer(openBtn.dataset.openLead);
     });
-
-    els.viewActivity?.addEventListener('change', (e) => {
+    els.crmViewActivity?.addEventListener('change', (e) => {
       const chk = e.target.closest('[data-toggle-task]');
       if (chk) toggleTaskStatus(chk.dataset.toggleTask, chk.checked);
     });
 
-    // Drawer navigation & forms
+    // Drawer events
     els.drawerCloseBtn?.addEventListener('click', closeDrawer);
     els.drawerBackdrop?.addEventListener('click', closeDrawer);
-
     document.querySelectorAll('[data-drawer-tab]').forEach((btn) => {
       btn.addEventListener('click', () => switchDrawerTab(btn.dataset.drawerTab));
     });
@@ -1270,7 +1907,6 @@
       els.editScoreNum.value = e.target.value;
       els.editScoreReadout.textContent = e.target.value;
     });
-
     els.editScoreNum?.addEventListener('input', (e) => {
       const clamped = Math.max(0, Math.min(100, Number.parseInt(e.target.value || '0', 10) || 0));
       els.editScoreRange.value = String(clamped);
@@ -1442,20 +2078,16 @@
       els.deleteStep1.hidden = true;
       els.deleteStep2.hidden = false;
     });
-
     els.deleteCancel?.addEventListener('click', () => {
       els.deleteStep1.hidden = false;
       els.deleteStep2.hidden = true;
     });
-
     els.deleteConfirm?.addEventListener('click', async () => {
       if (!state.selectedLeadId) return;
       const targetId = state.selectedLeadId;
       els.deleteConfirm.disabled = true;
       try {
-        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(targetId)}`, {
-          method: 'DELETE'
-        });
+        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
         closeDrawer();
         showToast('Expediente eliminado');
         await loadCrm(true);
@@ -1466,7 +2098,6 @@
       }
     });
 
-    // New Lead Modal
     els.newLeadForm?.addEventListener('submit', async (e) => {
       e.preventDefault();
       els.modalError.hidden = true;
@@ -1497,18 +2128,18 @@
           headers: {
             'Idempotency-Key': typeof crypto !== 'undefined' && crypto.randomUUID
               ? crypto.randomUUID()
-              : `crm-${Date.now()}`
+              : `admin-${Date.now()}`
           },
           body: JSON.stringify({
             name,
             email,
             phone,
             program,
-            source: 'CRM Admisiones',
+            source: 'Admin CRM',
             consentEmail,
             consentVoice,
             context: {
-              origen: 'crm-manual',
+              origen: 'admin-manual',
               ...(city ? { ciudad: city } : {}),
               ...(note ? { consulta: note } : {})
             }
@@ -1525,6 +2156,106 @@
       }
     });
 
+    // SEO Analysis events
+    document.querySelectorAll('[data-seo-days]').forEach((btn) => {
+      btn.addEventListener('click', () => loadSeo(Number(btn.dataset.seoDays)));
+    });
+    els.seoRefreshBtn?.addEventListener('click', () => loadSeo(state.seoDays));
+    els.seoSearch?.addEventListener('input', (e) => {
+      state.seoFilters.search = e.target.value;
+      renderSeoSection();
+    });
+    els.seoAreaFilter?.addEventListener('change', (e) => {
+      state.seoFilters.area = e.target.value;
+      renderSeoSection();
+    });
+    els.seoOpportunityFilter?.addEventListener('change', (e) => {
+      state.seoFilters.opportunity = e.target.value;
+      renderSeoSection();
+    });
+
+    els.seoSelectTopBtn?.addEventListener('click', () => {
+      const top = [...state.seoRows]
+        .filter((r) => typeof r.volume === 'number' && r.volume > 0)
+        .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+        .slice(0, 8);
+      state.seoSelectedIds = new Set(top.map((r) => r.id));
+      renderSeoSection();
+    });
+    els.seoClearSelBtn?.addEventListener('click', () => {
+      state.seoSelectedIds.clear();
+      renderSeoSection();
+    });
+    els.seoCheckAll?.addEventListener('change', (e) => {
+      const visible = getFilteredSeoRows();
+      if (e.target.checked) visible.forEach((r) => state.seoSelectedIds.add(r.id));
+      else visible.forEach((r) => state.seoSelectedIds.delete(r.id));
+      renderSeoSection();
+    });
+
+    els.seoTableBody?.addEventListener('change', (e) => {
+      const chk = e.target.closest('[data-seo-select]');
+      if (!chk) return;
+      if (chk.checked) state.seoSelectedIds.add(chk.dataset.seoSelect);
+      else state.seoSelectedIds.delete(chk.dataset.seoSelect);
+      renderSeoSection();
+    });
+
+    els.seoTableBody?.addEventListener('click', async (e) => {
+      const jumpBtn = e.target.closest('[data-seo-to-content]');
+      if (!jumpBtn) return;
+      const slug = jumpBtn.dataset.seoToContent;
+      switchSection('content', true);
+      if (!state.contentLoaded) await loadContent(false);
+      selectStudioProgram(slug, false);
+    });
+
+    document.querySelectorAll('[data-seo-q]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (els.seoQuestion) els.seoQuestion.value = btn.dataset.seoQ || '';
+        runSeoAnalysis();
+      });
+    });
+    els.seoAiForm?.addEventListener('submit', runSeoAnalysis);
+
+    // Content Engine events
+    els.contentRefreshBtn?.addEventListener('click', () => loadContent(true));
+    els.contentSearch?.addEventListener('input', (e) => {
+      state.contentFilters.search = e.target.value;
+      renderContentQueue();
+    });
+    els.contentStatusPills?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-content-status]');
+      if (!btn) return;
+      state.contentFilters.status = btn.dataset.contentStatus || '';
+      renderContentQueue();
+    });
+    els.contentPlanList?.addEventListener('click', (e) => {
+      const draftBtn = e.target.closest('[data-quick-draft]');
+      if (draftBtn) {
+        generateStudioDraft(draftBtn.dataset.quickDraft);
+        return;
+      }
+      const editBtn = e.target.closest('[data-open-studio]');
+      if (editBtn) {
+        selectStudioProgram(editBtn.dataset.openStudio, false);
+        return;
+      }
+      const card = e.target.closest('[data-plan-program]');
+      if (card) selectStudioProgram(card.dataset.planProgram, false);
+    });
+
+    document.querySelectorAll('[data-studio-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => setStudioMode(btn.dataset.studioMode));
+    });
+    els.studioProgram?.addEventListener('change', (e) => selectStudioProgram(e.target.value, false));
+    els.studioGenerateBtn?.addEventListener('click', () => generateStudioDraft(state.studioProgramSlug));
+    els.studioSaveDraftBtn?.addEventListener('click', () => saveStudioArticle('draft'));
+    els.studioEditorForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveStudioArticle('published');
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (!els.newLeadModal.hidden) closeNewLeadModal();
@@ -1538,6 +2269,7 @@
     populateSelects();
     bindEvents();
     checkHealth();
+    switchSection(sectionFromHash(), false);
     loadCrm();
     setupAutoRefresh();
   }

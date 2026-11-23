@@ -14,10 +14,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = resolve(__dirname, '..');
 const SITE_DIR = join(ROOT, 'site');
-const SITE_CRM_DIR = join(SITE_DIR, 'crm');
+const SITE_ADMIN_DIR = join(SITE_DIR, 'admin');
 const PUBLIC_DIR = join(ROOT, 'public');
 const PUBLIC_MEDIA_DIR = join(PUBLIC_DIR, 'media');
 const OUT_DIR = join(ROOT, 'dist-pages');
+const OUT_ADMIN_DIR = join(OUT_DIR, 'admin');
 const OUT_CRM_DIR = join(OUT_DIR, 'crm');
 const OUT_MEDIA_DIR = join(OUT_DIR, 'media');
 
@@ -80,6 +81,7 @@ function build() {
 
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_MEDIA_DIR, { recursive: true });
+  mkdirSync(OUT_ADMIN_DIR, { recursive: true });
   mkdirSync(OUT_CRM_DIR, { recursive: true });
 
   const mediaBasenames = new Set([
@@ -132,8 +134,8 @@ function build() {
 
   copyFileSync(join(SITE_DIR, 'styles.css'), join(OUT_DIR, 'styles.css'));
   copyFileSync(join(SITE_DIR, 'app.js'), join(OUT_DIR, 'app.js'));
-  copyFileSync(join(SITE_CRM_DIR, 'crm.css'), join(OUT_CRM_DIR, 'crm.css'));
-  copyFileSync(join(SITE_CRM_DIR, 'crm.js'), join(OUT_CRM_DIR, 'crm.js'));
+  copyFileSync(join(SITE_ADMIN_DIR, 'admin.css'), join(OUT_ADMIN_DIR, 'admin.css'));
+  copyFileSync(join(SITE_ADMIN_DIR, 'admin.js'), join(OUT_ADMIN_DIR, 'admin.js'));
 
   writeFileSync(join(OUT_DIR, 'config.json'), JSON.stringify(configObj, null, 2) + '\n', 'utf8');
   writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(staticPrograms, null, 2) + '\n', 'utf8');
@@ -144,7 +146,7 @@ function build() {
     .join('\n                ');
 
   let indexHtml = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
-  let crmIndexHtml = readFileSync(join(SITE_CRM_DIR, 'index.html'), 'utf8');
+  let adminIndexHtml = readFileSync(join(SITE_ADMIN_DIR, 'index.html'), 'utf8');
 
   const configTagRegex = /<script id="ucg-config" type="application\/json">[\s\S]*?<\/script>/;
   const catalogTagRegex = /<script id="catalog-data" type="application\/json">[\s\S]*?<\/script>/;
@@ -156,11 +158,11 @@ function build() {
   if (!catalogTagRegex.test(indexHtml)) {
     throw new Error('No se encontró <script id="catalog-data"> en site/index.html.');
   }
-  if (!configTagRegex.test(crmIndexHtml)) {
-    throw new Error('No se encontró <script id="ucg-config"> en site/crm/index.html.');
+  if (!configTagRegex.test(adminIndexHtml)) {
+    throw new Error('No se encontró <script id="ucg-config"> en site/admin/index.html.');
   }
-  if (!catalogTagRegex.test(crmIndexHtml)) {
-    throw new Error('No se encontró <script id="catalog-data"> en site/crm/index.html.');
+  if (!catalogTagRegex.test(adminIndexHtml)) {
+    throw new Error('No se encontró <script id="catalog-data"> en site/admin/index.html.');
   }
 
   const inlineConfigScript = `<script id="ucg-config" type="application/json">${safeInlineJson(configObj)}</script>`;
@@ -171,21 +173,37 @@ function build() {
     .replace(catalogTagRegex, () => inlineCatalogScript)
     .replace(optionsMarker, () => programOptionsHtml);
 
-  crmIndexHtml = crmIndexHtml
+  adminIndexHtml = adminIndexHtml
     .replace(configTagRegex, () => inlineConfigScript)
     .replace(catalogTagRegex, () => inlineCatalogScript);
 
-  writeFileSync(join(OUT_DIR, 'index.html'), indexHtml, 'utf8');
-  writeFileSync(join(OUT_CRM_DIR, 'index.html'), crmIndexHtml, 'utf8');
+  const crmRedirectHtml = `<!doctype html>
+<html lang="es-EC">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="refresh" content="0; url=../admin/">
+  <title>Redirigiendo a Admin · Posgrados UCG</title>
+  <script>location.replace('../admin/' + location.search + location.hash);</script>
+</head>
+<body>
+  <p>Redirigiendo a <a href="../admin/">Admin · Posgrados UCG</a>…</p>
+</body>
+</html>
+`;
 
-  verifyOutput(staticPrograms, indexHtml, crmIndexHtml);
+  writeFileSync(join(OUT_DIR, 'index.html'), indexHtml, 'utf8');
+  writeFileSync(join(OUT_ADMIN_DIR, 'index.html'), adminIndexHtml, 'utf8');
+  writeFileSync(join(OUT_CRM_DIR, 'index.html'), crmRedirectHtml, 'utf8');
+
+  verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml);
 
   console.log(
     JSON.stringify(
       {
         ok: true,
         outDir: 'dist-pages',
-        pages: ['index.html', 'crm/index.html'],
+        pages: ['index.html', 'admin/index.html', 'crm/index.html (redirect)'],
         programsCount: staticPrograms.length,
         mediaCopied: mediaBasenames.size,
         apiBase,
@@ -199,7 +217,7 @@ function build() {
 
 function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
   const rootMediaRefs = [
-    ...htmlText.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|crm\.css|crm\.js|favicon\.svg)[^"']*)["']/g),
+    ...htmlText.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|admin\.css|admin\.js|crm\.css|crm\.js|favicon\.svg)[^"']*)["']/g),
     ...cssText.matchAll(/url\(["']?(\/media\/[^)"']+)["']?\)/g)
   ];
   if (rootMediaRefs.length > 0) {
@@ -227,7 +245,7 @@ function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
   }
 }
 
-function verifyOutput(staticPrograms, indexHtml, crmIndexHtml) {
+function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml) {
   if (staticPrograms.length !== 34) {
     throw new Error(`Se esperaban 34 programas en el catálogo y se encontraron ${staticPrograms.length}.`);
   }
@@ -235,8 +253,11 @@ function verifyOutput(staticPrograms, indexHtml, crmIndexHtml) {
   if (/\bid=["']crm["']/.test(indexHtml)) {
     throw new Error('dist-pages/index.html aún contiene la sección #crm incrustada.');
   }
-  if (!indexHtml.includes('./crm/')) {
-    throw new Error('dist-pages/index.html debe enlazar al CRM dedicado (./crm/).');
+  if (!indexHtml.includes('./admin/')) {
+    throw new Error('dist-pages/index.html debe enlazar al workspace Admin (./admin/).');
+  }
+  if (!crmRedirectHtml.includes('../admin/')) {
+    throw new Error('dist-pages/crm/index.html debe redirigir a ../admin/.');
   }
 
   for (const p of staticPrograms) {
@@ -251,11 +272,12 @@ function verifyOutput(staticPrograms, indexHtml, crmIndexHtml) {
 
   const cssContent = readFileSync(join(OUT_DIR, 'styles.css'), 'utf8');
   const jsContent = readFileSync(join(OUT_DIR, 'app.js'), 'utf8');
-  const crmCssContent = readFileSync(join(OUT_CRM_DIR, 'crm.css'), 'utf8');
-  const crmJsContent = readFileSync(join(OUT_CRM_DIR, 'crm.js'), 'utf8');
+  const adminCssContent = readFileSync(join(OUT_ADMIN_DIR, 'admin.css'), 'utf8');
+  const adminJsContent = readFileSync(join(OUT_ADMIN_DIR, 'admin.js'), 'utf8');
 
   verifyRelativeAssetRefs(OUT_DIR, indexHtml, cssContent, 'dist-pages/index.html');
-  verifyRelativeAssetRefs(OUT_CRM_DIR, crmIndexHtml, crmCssContent, 'dist-pages/crm/index.html');
+  verifyRelativeAssetRefs(OUT_ADMIN_DIR, adminIndexHtml, adminCssContent, 'dist-pages/admin/index.html');
+  verifyRelativeAssetRefs(OUT_CRM_DIR, crmRedirectHtml, '', 'dist-pages/crm/index.html');
 
   const secretPatterns = [
     /\bkey_[a-f0-9]{16,}/i,
@@ -266,9 +288,10 @@ function verifyOutput(staticPrograms, indexHtml, crmIndexHtml) {
     ['index.html', indexHtml],
     ['styles.css', cssContent],
     ['app.js', jsContent],
-    ['crm/index.html', crmIndexHtml],
-    ['crm/crm.css', crmCssContent],
-    ['crm/crm.js', crmJsContent]
+    ['admin/index.html', adminIndexHtml],
+    ['admin/admin.css', adminCssContent],
+    ['admin/admin.js', adminJsContent],
+    ['crm/index.html', crmRedirectHtml]
   ]) {
     for (const pattern of secretPatterns) {
       if (pattern.test(text)) {

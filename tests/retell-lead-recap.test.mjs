@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { openSqliteD1, applyMigrations } from '../server/d1-sqlite.mjs';
 import { handleHttpRequest } from '../server/index.mjs';
 import { makeCallRecapDraft, previewNurturePlan } from '../src/conversation-nurture.js';
@@ -627,4 +628,180 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   }), env, ctx);
   assert.equal(delMissing.status, 404);
 });
+
+test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persistencia en SQLite', async t => {
+  // Explicitly verify against schema.sql + growth.sql + drizzle/0003_contenido_openseo.sql
+  const raw = new DatabaseSync(':memory:');
+  raw.exec(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
+  raw.exec(readFileSync(new URL('../growth.sql', import.meta.url), 'utf8'));
+  raw.exec(readFileSync(new URL('../drizzle/0003_contenido_openseo.sql', import.meta.url), 'utf8'));
+  const DB = {
+    prepare(sql) {
+      const bindValues = (values) => ({
+        bind: (...args) => bindValues(args),
+        first: () => raw.prepare(sql).get(...values) || null,
+        all: () => ({ results: raw.prepare(sql).all(...values) }),
+        run: () => {
+          const q = raw.prepare(sql);
+          return q.columns().length
+            ? { results: q.all(...values), meta: { changes: q.all(...values).length } }
+            : { results: [], meta: { changes: q.run(...values).changes } };
+        }
+      });
+      return bindValues([]);
+    },
+    batch(statements) {
+      raw.exec('BEGIN IMMEDIATE');
+      try {
+        const res = statements.map(s => s.run());
+        raw.exec('COMMIT');
+        return res;
+      } catch (err) {
+        raw.exec('ROLLBACK');
+        throw err;
+      }
+    },
+    close: () => raw.close()
+  };
+  t.after(() => DB.close());
+
+  const env = {
+    DB,
+    PUBLIC_BASE_URL: PUBLIC_BASE_URL
+  };
+  const ctx = { waitUntil(p) { Promise.resolve(p); } };
+  const origin = 'https://slimetoad.github.io';
+  const baseUrl = 'https://crm.example.up.railway.app';
+
+  // 1. GET /api/public/admin/seo?days=30
+  const seoRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=30', {
+    headers: { Origin: origin }
+  }), env, ctx);
+  assert.equal(seoRes.status, 200);
+  assert.equal(seoRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const seoData = await seoRes.json();
+  assert.equal(seoData.ok, true);
+  assert.equal(seoData.days, 30);
+  assert.ok(seoData.rows.length >= programs.length);
+  assert.ok(seoData.marketResearch.length >= programs.length);
+  assert.ok(seoData.summary.totalMonthlyVolume > 0);
+  assert.ok(seoData.summary.programsWithVolume > 0);
+  assert.ok(seoData.summary.avgCpcUsd > 0);
+
+  // Invalid days -> 400
+  const badDays = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=15'), env, ctx);
+  assert.equal(badDays.status, 400);
+
+  // 2. POST /api/public/admin/seo/analyze
+  const iaId = 'programa:maestria-en-ia-y-ciencia-de-datos';
+  const analyzeRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ days: 30, ids: [iaId], question: '¿Qué demanda tiene la maestría en inteligencia artificial?' })
+  }), env, ctx);
+  assert.equal(analyzeRes.status, 200);
+  assert.equal(analyzeRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const analyzed = await analyzeRes.json();
+  assert.equal(analyzed.ok, true);
+  assert.ok(Array.isArray(analyzed.findings) && analyzed.findings.length >= 1);
+  assert.ok(analyzed.findings[0].references.some(r => r.id === iaId));
+
+  // 3. Cross-origin POST /api/editorial/insights
+  const insightsCorsRes = await handleHttpRequest(new Request(baseUrl + '/api/editorial/insights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin, 'Sec-Fetch-Site': 'cross-site' },
+    body: JSON.stringify({ days: 30, ids: [iaId], question: '¿Cuál es el volumen de búsqueda?' })
+  }), env, ctx);
+  assert.equal(insightsCorsRes.status, 200);
+  assert.equal(insightsCorsRes.headers.get('Access-Control-Allow-Origin'), origin);
+
+  // 4. GET /api/public/admin/content
+  const contentRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content', {
+    headers: { Origin: origin }
+  }), env, ctx);
+  assert.equal(contentRes.status, 200);
+  assert.equal(contentRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const contentData = await contentRes.json();
+  assert.equal(contentData.ok, true);
+  assert.equal(contentData.plan.length, programs.length);
+  assert.equal(contentData.stats.plannedPrograms, programs.length);
+  assert.equal(contentData.stats.publishedGuides, 0);
+
+  // 5. POST /api/public/admin/content/draft (template fallback)
+  const draftRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({
+      programSlug: 'maestria-en-ia-y-ciencia-de-datos',
+      keyword: 'maestría en inteligencia artificial',
+      customAngle: 'Enfoque práctico para profesionales en Ecuador'
+    })
+  }), env, ctx);
+  assert.equal(draftRes.status, 200);
+  assert.equal(draftRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const draftJson = await draftRes.json();
+  assert.equal(draftJson.ok, true);
+  assert.equal(draftJson.source, 'template');
+  assert.equal(draftJson.article.status, 'draft');
+  assert.equal(draftJson.article.program, 'maestria-en-ia-y-ciencia-de-datos');
+  assert.ok(draftJson.article.body.length > 100);
+
+  // 6. POST /api/public/admin/content/publish
+  const publishRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({
+      id: draftJson.article.id,
+      programSlug: 'maestria-en-ia-y-ciencia-de-datos',
+      slug: draftJson.article.slug,
+      title: 'Guía oficial: Maestría en IA y Ciencia de Datos UCG',
+      summary: 'Conoce la modalidad en línea, duración y enfoque de la Maestría en IA de la Universidad Casa Grande.',
+      body: draftJson.article.body + '\n\nActualizado desde Content Engine.',
+      status: 'published'
+    })
+  }), env, ctx);
+  assert.equal(publishRes.status, 200);
+  assert.equal(publishRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const pubJson = await publishRes.json();
+  assert.equal(pubJson.ok, true);
+  assert.equal(pubJson.article.status, 'published');
+  assert.ok(pubJson.article.publishedAt);
+
+  // 7. Re-read GET /api/public/admin/content & GET /api/public/admin/seo to confirm published guide shows up
+  const contentAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content'), env, ctx)).json();
+  assert.equal(contentAfter.stats.publishedGuides, 1);
+  assert.ok(contentAfter.stats.coveredVolume >= 720);
+  const iaPlan = contentAfter.plan.find(p => p.program === 'maestria-en-ia-y-ciencia-de-datos');
+  assert.equal(iaPlan.status, 'published');
+  assert.equal(iaPlan.title, 'Guía oficial: Maestría en IA y Ciencia de Datos UCG');
+
+  const seoAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=30'), env, ctx)).json();
+  assert.equal(seoAfter.summary.publishedGuides, 1);
+  assert.ok(seoAfter.rows.some(r => r.kind === 'guia' && r.program === 'maestria-en-ia-y-ciencia-de-datos'));
+
+  // 8. POST /api/public/admin/content/draft with Anthropic mocked
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    assert.equal(url, 'https://api.anthropic.com/v1/messages');
+    return Response.json({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          title: 'Maestría en Ciberseguridad UCG: Plan y Modalidad',
+          summary: 'Explora la modalidad en línea y duración de 2 semestres de la Maestría en Ciberseguridad de Universidad Casa Grande.',
+          body: 'La Maestría en Ciberseguridad de la Universidad Casa Grande prepara profesionales en Ecuador para gestionar riesgos digitales, defensa de redes y análisis forense en modalidad en línea durante dos semestres.\n\nRevisa la ficha institucional para conocer el detalle de asignaturas y confirma con Admisiones la convocatoria vigente.'
+        })
+      }]
+    });
+  });
+  const aiDraftRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ programSlug: 'maestria-en-ciberseguridad' })
+  }), { ...env, ANTHROPIC_API_KEY: 'test-anthropic-key', ANTHROPIC_MODEL: 'claude-haiku-5-5' }, ctx);
+  assert.equal(aiDraftRes.status, 200);
+  const aiDraftJson = await aiDraftRes.json();
+  assert.equal(aiDraftJson.source, 'anthropic');
+  assert.match(aiDraftJson.article.title, /Ciberseguridad/);
+});
+
 

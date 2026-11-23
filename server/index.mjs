@@ -10,6 +10,11 @@ import { followupOnCapture } from '../src/capture-followup.js';
 import { withConversationWake } from '../src/conversation-wake.js';
 import { contactEmail, isPhoneIdentity } from '../src/contact-identity.js';
 import { clean, matches, normalized, programFact } from '../src/providers.js';
+import { loadSeoEvidence } from '../src/seo-insights-data.js';
+import { buildSeoInsights } from '../src/seo-insights.js';
+import { marketSnapshot } from '../src/openseo-ecuador.js';
+import { ensurePlan, publicEditorial } from '../src/editorial-engine.js';
+import { draftEditorialArticle, editorialProposal, institutionalUrl } from '../src/editorial-draft.js';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const PUBLIC_DIR = resolve(ROOT_DIR, 'public');
@@ -21,7 +26,8 @@ const CROSS_ORIGIN_PUBLIC_PATHS = new Set([
   '/api/analytics',
   '/api/hubs',
   '/api/citas/solicitar',
-  '/api/citas/gestionar'
+  '/api/citas/gestionar',
+  '/api/editorial/insights'
 ]);
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -765,6 +771,420 @@ async function routePublicCrm(request, env, path) {
   return crmJson({ error: 'Ruta de CRM no encontrada.' }, 404);
 }
 
+const SEO_PERIODS = new Set([7, 30, 90]);
+const DEFAULT_SEO_QUESTION = '¿Qué hallazgos merecen atención y qué páginas conviene investigar primero?';
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+async function handleAdminSeoGet(env, url) {
+  const daysRaw = url.searchParams.get('days');
+  const days = daysRaw === null ? 30 : Number(daysRaw);
+  if (!SEO_PERIODS.has(days)) {
+    return crmJson({ error: 'Elige un período válido de 7, 30 o 90 días.' }, 400);
+  }
+  const evidence = await loadSeoEvidence(env, programs, days, { team: true });
+  const programRows = evidence.rows.filter(r => r.kind === 'programa');
+  const guideRows = evidence.rows.filter(r => r.kind === 'guia');
+  const cpcValues = programRows.map(r => r.metrics?.cpc).filter(v => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  const avgCpcUsd = cpcValues.length
+    ? Math.round((cpcValues.reduce((a, b) => a + b, 0) / cpcValues.length) * 100) / 100
+    : 0;
+  const totalMonthlyVolume = programRows.reduce((sum, r) => sum + (Number.isFinite(r.metrics?.searchVolume) ? r.metrics.searchVolume : 0), 0);
+  const programsWithVolume = programRows.filter(r => (r.metrics?.searchVolume ?? 0) > 0).length;
+
+  return crmJson({
+    ok: true,
+    days,
+    start: evidence.start,
+    end: evidence.end,
+    rows: evidence.rows,
+    marketResearch: marketSnapshot,
+    summary: {
+      totalPages: evidence.rows.length,
+      programsWithVolume,
+      totalMonthlyVolume,
+      avgCpcUsd,
+      publishedGuides: guideRows.length
+    }
+  });
+}
+
+async function handleAdminSeoAnalyze(request, env) {
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía una selección válida en formato JSON.' }, 400);
+  const days = body.days === undefined ? 30 : Number(body.days);
+  if (!SEO_PERIODS.has(days)) return crmJson({ error: 'Elige un período válido de 7, 30 o 90 días.' }, 400);
+  const ids = body.ids === undefined ? [] : body.ids;
+  if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !id.length || id.length > 225)) {
+    return crmJson({ error: 'Selecciona hasta 100 páginas para analizar.' }, 400);
+  }
+  if (body.question !== undefined && body.question !== null && (typeof body.question !== 'string' || body.question.length > 600)) {
+    return crmJson({ error: 'Escribe una pregunta de hasta 600 caracteres.' }, 400);
+  }
+  const question = typeof body.question === 'string' && body.question.trim() ? body.question.trim() : DEFAULT_SEO_QUESTION;
+  const evidence = await loadSeoEvidence(env, programs, days, { team: true });
+  const selectedIds = new Set(ids);
+  const rows = selectedIds.size ? evidence.rows.filter(row => selectedIds.has(row.id)) : evidence.rows;
+  if (selectedIds.size && !rows.length) {
+    return crmJson({ error: 'Las páginas seleccionadas no coinciden con el tablero actual.' }, 422);
+  }
+  const insights = await buildSeoInsights(env, { days, start: evidence.start, end: evidence.end, rows }, question);
+  return crmJson({ ok: true, days, start: evidence.start, end: evidence.end, ...insights });
+}
+
+async function ensureEditorialSeeded(env) {
+  const countRow = await env.DB.prepare('SELECT COUNT(*) AS n FROM seo_editorial_plan').first();
+  const force = !countRow || countRow.n === 0;
+  await ensurePlan(env.DB, programs, new Date(), 'Admin', force);
+}
+
+async function handleAdminContentGet(env) {
+  await ensureEditorialSeeded(env);
+  const [editorial, articlesRes, planRes] = await Promise.all([
+    publicEditorial(env, programs),
+    env.DB.prepare(`SELECT id, slug, opportunity_id, program, title, summary, body,
+      source_query AS sourceQuery, source_url AS sourceUrl, status,
+      created_at AS createdAt, updated_at AS updatedAt, published_at AS publishedAt, editor
+      FROM seo_articles ORDER BY updated_at DESC, slug ASC`).all(),
+    env.DB.prepare(`SELECT id, program, kind, signal_key, title, cluster, intent, search_question, priority, reason,
+      evidence, source_url, source_verified_at, scheduled_at, status,
+      draft_title, draft_summary, draft_body, content_revision, published_revision, updated_at
+      FROM seo_editorial_plan ORDER BY priority DESC, id ASC`).all()
+  ]);
+
+  const articles = articlesRes.results || [];
+  const planRows = planRes.results || [];
+  const articleByOpp = new Map(articles.map(a => [a.opportunity_id, a]));
+  const articleByProgram = new Map();
+  for (const a of articles) {
+    if (!articleByProgram.has(a.program)) articleByProgram.set(a.program, a);
+  }
+  const marketByProgram = new Map(marketSnapshot.map(m => [m.program, m]));
+  const programMap = new Map(programs.map(p => [p.slug, p]));
+
+  const plan = planRows.map(row => {
+    const prog = programMap.get(row.program);
+    const market = marketByProgram.get(row.program);
+    const ev = safeJson(row.evidence, {});
+    const article = articleByOpp.get('editorial:' + row.id) || articleByProgram.get(row.program) || null;
+    const effectiveStatus = article?.status || row.status || 'planned';
+    return {
+      id: row.id,
+      program: row.program,
+      programTitle: prog?.title || row.program,
+      shortTitle: prog?.shortTitle || prog?.title || row.program,
+      area: prog?.area || row.cluster,
+      kind: row.kind,
+      cluster: row.cluster,
+      intent: row.intent,
+      priority: row.priority,
+      reason: row.reason,
+      searchQuestion: row.search_question,
+      keyword: market?.keyword || ev.search?.keyword || row.search_question,
+      volume: market?.volume ?? ev.search?.volume ?? null,
+      cpc: market?.cpc ?? null,
+      difficulty: market?.difficulty ?? ev.search?.difficulty ?? null,
+      status: effectiveStatus,
+      scheduledAt: row.scheduled_at,
+      sourceUrl: row.source_url || prog?.url || brand.catalogUrl,
+      articleId: article?.id || null,
+      articleSlug: article?.slug || (prog ? 'guia-' + prog.slug : row.id),
+      title: article?.title || row.draft_title || row.title,
+      summary: article?.summary || row.draft_summary || '',
+      body: article?.body || row.draft_body || '',
+      publishedAt: article?.publishedAt || null,
+      updatedAt: article?.updatedAt || row.updated_at || null
+    };
+  });
+
+  const publishedPrograms = new Set(articles.filter(a => a.status === 'published').map(a => a.program));
+  const draftPrograms = new Set([
+    ...articles.filter(a => a.status === 'draft').map(a => a.program),
+    ...plan.filter(p => p.status === 'draft').map(p => p.program)
+  ]);
+  const coveredPrograms = new Set([...publishedPrograms, ...draftPrograms]);
+  const coveredVolume = [...coveredPrograms].reduce((sum, slug) => sum + (marketByProgram.get(slug)?.volume || 0), 0);
+
+  return crmJson({
+    ok: true,
+    week: editorial.week,
+    plan,
+    articles,
+    marketResearch: marketSnapshot,
+    stats: {
+      plannedPrograms: plan.length,
+      publishedGuides: publishedPrograms.size,
+      draftGuides: draftPrograms.size,
+      coveredVolume
+    }
+  });
+}
+
+async function handleAdminContentDraft(request, env) {
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  const programSlug = clean(body.programSlug, 160);
+  const program = programs.find(p => p.slug === programSlug);
+  if (!program) return crmJson({ error: 'Selecciona una maestría válida del catálogo.' }, 422);
+
+  await ensureEditorialSeeded(env);
+  const planId = 'guia-' + programSlug;
+  let planRow = await env.DB.prepare('SELECT * FROM seo_editorial_plan WHERE id = ?').bind(planId).first();
+  if (!planRow) {
+    await ensurePlan(env.DB, programs, new Date(), 'Admin', true);
+    planRow = await env.DB.prepare('SELECT * FROM seo_editorial_plan WHERE id = ?').bind(planId).first();
+  }
+
+  const market = marketSnapshot.find(m => m.program === programSlug) || null;
+  const keyword = clean(body.keyword, 200) || market?.keyword || planRow?.search_question || program.title;
+  const customAngle = cleanEmailBody(body.customAngle, 400);
+  const proposal = editorialProposal(program, market ? {
+    keyword: market.keyword,
+    source: market.source,
+    volume: market.volume,
+    observedAt: market.observedAt,
+    shareable: true
+  } : null);
+
+  const planForDraft = {
+    ...(planRow || {}),
+    id: planRow?.id || planId,
+    program: programSlug,
+    kind: planRow?.kind || 'catalogo',
+    intent: planRow?.intent || proposal.intent,
+    title: planRow?.title || proposal.title,
+    search_question: keyword,
+    source_url: proposal.sourceUrl || institutionalUrl(program.url),
+    source_verified_at: proposal.sourceVerifiedAt
+  };
+  const evidenceObj = planRow ? safeJson(planRow.evidence, {}) : {};
+  const shell = draftEditorialArticle(planForDraft, program, {
+    ...evidenceObj,
+    search: evidenceObj.search || (market ? {
+      keyword: market.keyword,
+      source: market.source,
+      volume: market.volume,
+      observedAt: market.observedAt,
+      shareable: true
+    } : null)
+  });
+
+  const fallbackTitle = clean(shell?.title || proposal.title, 180);
+  const fallbackSummary = cleanEmailBody(shell?.summary || proposal.angle, 400);
+  const fallbackBody = cleanEmailBody(
+    shell
+      ? [shell.intro, ...shell.blocks, shell.closing, shell.reference].filter(Boolean).join('\n\n')
+      : `${proposal.angle}\n\n${program.summary}\n\nModalidad: ${program.mode || 'Confirmar con Admisiones'}. Duración: ${program.duration || 'Confirmar con Admisiones'}.\n\nFuente oficial: ${program.url}`,
+    12000
+  );
+
+  let title = fallbackTitle;
+  let summary = fallbackSummary;
+  let articleBody = fallbackBody;
+  let source = 'template';
+
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      const promptInput = {
+        programa: programFact(program),
+        palabraClaveObjetivo: keyword,
+        volumenMensualEcuador: market?.volume ?? null,
+        enfoquePersonalizado: customAngle || null,
+        borradorBase: { title: fallbackTitle, summary: fallbackSummary, body: fallbackBody }
+      };
+      const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+          max_tokens: 1400,
+          system: 'Eres editor académico de Posgrados de la Universidad Casa Grande (Guayaquil, Ecuador). Redacta una guía SEO útil y clara en español ecuatoriano (usted) para aspirantes de posgrado. Usa EXCLUSIVAMENTE los hechos verificados de programa y borradorBase: NUNCA inventes aranceles, becas, fechas de cohorte ni requisitos no publicados. Responde EXCLUSIVAMENTE con JSON válido con las claves exactas: "title" (máximo 160 caracteres), "summary" (máximo 340 caracteres) y "body" (entre 250 y 700 palabras en texto plano con párrafos separados por doble salto de línea).',
+          messages: [{ role: 'user', content: JSON.stringify(promptInput) }]
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (aiRes.ok) {
+        const data = await aiRes.json();
+        const rawText = (data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
+        const parsed = JSON.parse(rawText.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim());
+        const aiTitle = clean(parsed?.title, 180);
+        const aiSummary = cleanEmailBody(parsed?.summary, 400);
+        const aiBody = cleanEmailBody(parsed?.body, 12000);
+        if (aiTitle.length >= 8 && aiSummary.length >= 20 && aiBody.length >= 120) {
+          title = aiTitle;
+          summary = aiSummary;
+          articleBody = aiBody;
+          source = 'anthropic';
+        }
+      }
+    } catch {
+      // Fall back cleanly to the deterministic catalog-grounded editorial draft.
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const oppId = 'editorial:' + planId;
+  const existingArticle = await env.DB.prepare('SELECT * FROM seo_articles WHERE opportunity_id = ?').bind(oppId).first();
+  let slug = existingArticle?.slug || planId;
+  if (!existingArticle) {
+    const slugConflict = await env.DB.prepare('SELECT id FROM seo_articles WHERE slug = ?').bind(slug).first();
+    if (slugConflict) slug = `${planId}-${crypto.randomUUID().slice(0, 6)}`;
+  }
+  const articleId = existingArticle?.id || crypto.randomUUID();
+  const nextStatus = existingArticle?.status === 'published' ? 'published' : 'draft';
+  const sourceUrl = planRow?.source_url || program.url || brand.catalogUrl;
+
+  const batch = [
+    env.DB.prepare(`INSERT INTO seo_articles
+      (id, slug, opportunity_id, program, title, summary, body, source_query, source_url, status, created_at, updated_at, published_at, editor)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Admin Content Engine')
+      ON CONFLICT(opportunity_id) DO UPDATE SET
+        title = excluded.title,
+        summary = excluded.summary,
+        body = excluded.body,
+        source_query = excluded.source_query,
+        source_url = excluded.source_url,
+        updated_at = excluded.updated_at,
+        editor = excluded.editor`)
+      .bind(articleId, slug, oppId, programSlug, title, summary, articleBody, keyword, sourceUrl, nextStatus, nowIso, nowIso, existingArticle?.published_at || null)
+  ];
+  if (planRow) {
+    batch.push(
+      env.DB.prepare(`UPDATE seo_editorial_plan SET
+        draft_title = ?, draft_summary = ?, draft_body = ?,
+        status = CASE WHEN status = 'planned' THEN 'draft' ELSE status END,
+        content_revision = content_revision + 1,
+        updated_at = ?,
+        revision = revision + 1
+        WHERE id = ?`).bind(title, summary, articleBody, nowIso, planId)
+    );
+  }
+  batch.push(
+    env.DB.prepare(`SELECT id, slug, opportunity_id, program, title, summary, body,
+      source_query AS sourceQuery, source_url AS sourceUrl, status,
+      created_at AS createdAt, updated_at AS updatedAt, published_at AS publishedAt, editor
+      FROM seo_articles WHERE opportunity_id = ?`).bind(oppId)
+  );
+  const results = await env.DB.batch(batch);
+  const savedArticle = results.at(-1)?.results?.[0];
+  return crmJson({ ok: true, source, article: savedArticle });
+}
+
+async function handleAdminContentPublish(request, env) {
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  const programSlug = clean(body.programSlug, 160);
+  const program = programs.find(p => p.slug === programSlug);
+  if (!program) return crmJson({ error: 'Selecciona una maestría válida del catálogo.' }, 422);
+  const status = body.status === undefined ? 'published' : body.status;
+  if (!['draft', 'published'].includes(status)) return crmJson({ error: 'El estado debe ser draft o published.' }, 422);
+
+  const title = clean(body.title, 180);
+  const summary = cleanEmailBody(body.summary, 400);
+  const articleBody = cleanEmailBody(body.body, 12000);
+  if (title.length < 5 || summary.length < 10 || articleBody.length < 40) {
+    return crmJson({ error: 'Completa el título, resumen y contenido antes de guardar o publicar.' }, 422);
+  }
+
+  const rawSlug = clean(body.slug, 120).toLowerCase();
+  const targetSlug = rawSlug || ('guia-' + programSlug);
+  if (!SLUG_RE.test(targetSlug)) {
+    return crmJson({ error: 'El slug debe contener solo letras minúsculas, números y guiones.' }, 422);
+  }
+
+  await ensureEditorialSeeded(env);
+  const planId = 'guia-' + programSlug;
+  const oppId = 'editorial:' + planId;
+  const planRow = await env.DB.prepare('SELECT * FROM seo_editorial_plan WHERE id = ?').bind(planId).first();
+  const requestedId = clean(body.id, 160);
+  const existingById = requestedId ? await env.DB.prepare('SELECT * FROM seo_articles WHERE id = ?').bind(requestedId).first() : null;
+  const existingByOpp = existingById || await env.DB.prepare('SELECT * FROM seo_articles WHERE opportunity_id = ?').bind(oppId).first();
+  const slugOwner = await env.DB.prepare('SELECT id, opportunity_id FROM seo_articles WHERE slug = ?').bind(targetSlug).first();
+  if (slugOwner && slugOwner.id !== existingByOpp?.id) {
+    return crmJson({ error: 'Ese slug ya está en uso por otra guía.' }, 409);
+  }
+
+  const nowIso = new Date().toISOString();
+  const articleId = existingByOpp?.id || crypto.randomUUID();
+  const effectiveOpp = existingByOpp?.opportunity_id || oppId;
+  const market = marketSnapshot.find(m => m.program === programSlug);
+  const sourceQuery = existingByOpp?.source_query || market?.keyword || planRow?.search_question || program.title;
+  const sourceUrl = existingByOpp?.source_url || planRow?.source_url || program.url || brand.catalogUrl;
+  const publishedAt = status === 'published' ? (existingByOpp?.published_at || nowIso) : null;
+
+  const batch = [
+    env.DB.prepare(`INSERT INTO seo_articles
+      (id, slug, opportunity_id, program, title, summary, body, source_query, source_url, status, created_at, updated_at, published_at, editor)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Admin Content Engine')
+      ON CONFLICT(id) DO UPDATE SET
+        slug = excluded.slug,
+        title = excluded.title,
+        summary = excluded.summary,
+        body = excluded.body,
+        status = excluded.status,
+        updated_at = excluded.updated_at,
+        published_at = excluded.published_at,
+        editor = excluded.editor`)
+      .bind(articleId, targetSlug, effectiveOpp, programSlug, title, summary, articleBody, sourceQuery, sourceUrl, status, existingByOpp?.created_at || nowIso, nowIso, publishedAt)
+  ];
+  if (planRow) {
+    batch.push(
+      env.DB.prepare(`UPDATE seo_editorial_plan SET
+        status = ?,
+        draft_title = ?,
+        draft_summary = ?,
+        draft_body = ?,
+        content_revision = content_revision + 1,
+        published_revision = CASE WHEN ? = 'published' THEN content_revision + 1 ELSE published_revision END,
+        updated_at = ?,
+        revision = revision + 1
+        WHERE id = ?`).bind(status, title, summary, articleBody, status, nowIso, planId)
+    );
+  }
+  batch.push(
+    env.DB.prepare(`SELECT id, slug, opportunity_id, program, title, summary, body,
+      source_query AS sourceQuery, source_url AS sourceUrl, status,
+      created_at AS createdAt, updated_at AS updatedAt, published_at AS publishedAt, editor
+      FROM seo_articles WHERE id = ?`).bind(articleId)
+  );
+  const results = await env.DB.batch(batch);
+  return crmJson({ ok: true, article: results.at(-1)?.results?.[0] });
+}
+
+async function routePublicAdmin(request, env, url, path) {
+  if (!env.DB) return crmJson({ error: 'Base de datos no disponible.' }, 503);
+  if (path === '/api/public/admin/seo') {
+    if (['GET', 'HEAD'].includes(request.method)) {
+      const res = await handleAdminSeoGet(env, url);
+      return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
+    }
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/seo/analyze') {
+    if (request.method === 'POST') return handleAdminSeoAnalyze(request, env);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/content') {
+    if (['GET', 'HEAD'].includes(request.method)) {
+      const res = await handleAdminContentGet(env);
+      return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
+    }
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/content/draft') {
+    if (request.method === 'POST') return handleAdminContentDraft(request, env);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/content/publish') {
+    if (request.method === 'POST') return handleAdminContentPublish(request, env);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  return crmJson({ error: 'Ruta de Admin no encontrada.' }, 404);
+}
+
 async function handleCatalogLookup(request) {
   let payload;
   try {
@@ -869,6 +1289,11 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
       return crmJson({ error: 'Origen no permitido.' }, 403);
     }
     response = await routePublicCrm(request, env, path);
+  } else if (path.startsWith('/api/public/admin/')) {
+    if (!['GET', 'HEAD'].includes(request.method) && originHeader && !isAllowedOrigin(originHeader, env, url.origin)) {
+      return crmJson({ error: 'Origen no permitido.' }, 403);
+    }
+    response = await routePublicAdmin(request, env, url, path);
   } else if (path === '/api/retell/catalog-lookup' && request.method === 'POST') {
     response = await handleCatalogLookup(request);
   } else {
