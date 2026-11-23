@@ -19,7 +19,9 @@ The soundtrack is composed procedurally and scored to the edit.
 | 6. Mix and mux | `mix.py` | `product-demo-final.mp4` |
 
 Scene lengths follow the narration: `render.mjs` passes `narration.json` to the page,
-and each scene stretches to fit its line. Recordings play at 0.8× to 1.3× to match.
+and each scene stretches to fit its line. Recordings play at exactly 1.2× (one 25 fps
+recorded frame per 30 fps film frame, so nothing stutters) and hold their last frame when
+a line runs longer than the recording.
 `music.py` reads `timeline.json`, so builds, risers and impacts land on the cuts, and
 `mix.py` ducks the music under the voice.
 
@@ -54,6 +56,7 @@ scene moves the applicant the form creates.
 - Narration: `narration/lines.json` (one line per scene id).
 - Scenes, captions, stat cards and order: the `plan` array in `demo.js`.
 - Interactions: `scenarios` in `capture.mjs`.
+- Speed of recordings: `PLAY_RATE` in `demo.js` (keep it at the film/recording frame-rate ratio).
 - Music: tempo, chords and section energy at the top of `music.py`; mix levels in `mix.py`.
 
 ## What the film claims, and where it comes from

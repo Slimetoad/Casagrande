@@ -14,8 +14,8 @@ from scipy.signal import resample_poly
 HERE = Path(__file__).resolve().parent
 BUILD = HERE / "build"
 SR = 44100
-MUSIC_BED = 0.42      # music level with no voice
-MUSIC_UNDER = 0.13    # music level under the voice
+MUSIC_BED = 0.22      # music level with no voice
+MUSIC_UNDER = 0.10    # music level under the voice
 VOICE = 1.0
 
 
@@ -52,7 +52,7 @@ def main():
     # Sidechain: a decimated envelope keeps the loop cheap, then it is upsampled.
     step = 64
     active = (np.abs(voice[: n - n % step]).reshape(-1, step).max(1) > 0.02).astype(np.float32)
-    active = np.repeat(smooth(np.repeat(active, 1), 0.08 * SR / step / SR, 0.6 * SR / step / SR), step)
+    active = np.repeat(smooth(active, 0.3 / step, 1.6 / step), step)
     active = np.pad(active, (0, n - len(active)), constant_values=active[-1] if len(active) else 0)
     gain = MUSIC_BED + (MUSIC_UNDER - MUSIC_BED) * np.clip(active, 0, 1)
     mix = music * gain[:, None] + voice[:, None]

@@ -113,7 +113,7 @@ def build(total, scenes):
                 tk = t0 + k * BEAT
                 m = int(0.42 * SR); t = np.arange(m) / SR
                 f = 48 + 110 * np.exp(-t * 28)
-                kick = np.sin(2*np.pi*np.cumsum(f)/SR) * np.exp(-t * 7.5) * 0.55
+                kick = np.sin(2*np.pi*np.cumsum(f)/SR) * np.exp(-t * 7.5) * 0.42
                 place(drums, stereo(kick.astype(np.float32)), tk); kick_times.append(tk)
                 if k in (1, 3):
                     m2 = int(0.25 * SR); t2 = np.arange(m2) / SR
@@ -134,7 +134,7 @@ def build(total, scenes):
     for tk in kick_times:
         i = int(tk * SR); m = int(0.3 * SR)
         j = min(n, i + m)
-        duck[i:j] = np.minimum(duck[i:j], 1 - 0.55 * np.exp(-np.arange(j - i) / SR / 0.09))
+        duck[i:j] = np.minimum(duck[i:j], 1 - 0.28 * np.exp(-np.arange(j - i) / SR / 0.09))
     pad *= duck[:, None]; bass *= duck[:, None]
 
     # Risers into and impacts on each scene change (skip very short gaps)
