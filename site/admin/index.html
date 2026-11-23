@@ -47,6 +47,10 @@
           <span>IA: <strong data-voice-phone-display>+1 (912) 491-5544</strong></span>
         </a>
 
+        <button id="signout-btn" type="button" class="btn btn-dark-outline btn-sm" title="Cerrar la sesión del equipo en esta pestaña" hidden>
+          <span>Salir</span>
+        </button>
+
         <button id="refresh-all-btn" type="button" class="btn btn-dark-outline btn-sm" title="Actualizar sección activa">
           <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           <span>Actualizar</span>
@@ -55,7 +59,24 @@
     </div>
   </header>
 
-  <main id="admin-workspace" class="admin-main" tabindex="-1">
+  <!-- STAFF SIGN-IN: the Admin API requires a staff credential. It is kept only in this tab's sessionStorage. -->
+  <section id="signin-gate" class="signin-gate" aria-labelledby="signin-title">
+    <form id="signin-form" class="signin-card" autocomplete="off">
+      <h1 id="signin-title">Acceso del equipo de admisiones</h1>
+      <p class="signin-copy">Ingresa la credencial del equipo para ver expedientes, SEO y contenidos. Se guarda solo en esta pestaña y se borra al cerrarla.</p>
+      <label class="field">
+        <span>Credencial del equipo</span>
+        <input id="signin-token" type="password" required minlength="32" maxlength="1024" autocomplete="off" spellcheck="false" autocapitalize="off">
+      </label>
+      <p class="signin-host">Servidor: <strong id="signin-api-host">—</strong></p>
+      <div id="signin-error" class="alert-banner alert-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button id="signin-submit" type="submit" class="btn btn-primary">Entrar</button>
+      </div>
+    </form>
+  </section>
+
+  <main id="admin-workspace" class="admin-main" tabindex="-1" hidden>
     <!-- ==================== SECTION 1: CRM ==================== -->
     <section id="section-crm" class="workspace-section" aria-label="CRM de Admisiones">
       <div class="section-toolbar">

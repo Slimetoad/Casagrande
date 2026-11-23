@@ -5,9 +5,15 @@
   const SECTIONS = ['crm', 'seo', 'content'];
   const DEFAULT_API_BASE = 'https://casagrande-posgrados-production.up.railway.app';
   const DEFAULT_VOICE_PHONE = '+19124915544';
+  // Staff credential lives only in this tab's sessionStorage, bound to the API origin it was
+  // issued for. It is never written to the page, config files or localStorage.
+  const SESSION_KEY = 'ucg-admin-session';
+  const ADMIN_API_PREFIX = '/api/admin/';
 
   const state = {
     apiBase: DEFAULT_API_BASE,
+    staffToken: '',
+    signedIn: false,
     voicePhone: DEFAULT_VOICE_PHONE,
     activeSection: 'crm',
     programs: [],
@@ -72,6 +78,14 @@
     healthPill: document.getElementById('health-pill'),
     healthText: document.getElementById('health-text'),
     refreshAllBtn: document.getElementById('refresh-all-btn'),
+    signoutBtn: document.getElementById('signout-btn'),
+    workspace: document.getElementById('admin-workspace'),
+    signinGate: document.getElementById('signin-gate'),
+    signinForm: document.getElementById('signin-form'),
+    signinToken: document.getElementById('signin-token'),
+    signinError: document.getElementById('signin-error'),
+    signinSubmit: document.getElementById('signin-submit'),
+    signinApiHost: document.getElementById('signin-api-host'),
 
     // CRM elements
     newLeadBtn: document.getElementById('new-lead-btn'),
@@ -350,9 +364,22 @@
     }
   }
 
+  // ?api= may only point the Admin at a local development server. Otherwise a crafted link
+  // could make a signed-in staff member send their credential to an arbitrary host.
+  function localDevApiBase(candidate) {
+    const clean = sanitizeApiBase(candidate);
+    if (!clean) return '';
+    try {
+      const { hostname } = new URL(clean);
+      return hostname === 'localhost' || hostname === '127.0.0.1' ? clean : '';
+    } catch {
+      return '';
+    }
+  }
+
   async function resolveConfig() {
     const params = new URLSearchParams(window.location.search);
-    const queryApi = sanitizeApiBase(params.get('api') || '');
+    const queryApi = localDevApiBase(params.get('api') || '');
     if (queryApi) state.apiBase = queryApi;
 
     const inlineConfigEl = document.getElementById('ucg-config');
@@ -446,16 +473,89 @@
     window.setTimeout(() => toast.remove(), link ? 6500 : 3800);
   }
 
+  // ==================== STAFF SESSION ====================
+  function readStaffToken() {
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || 'null');
+      return saved && saved.apiBase === state.apiBase && typeof saved.token === 'string' ? saved.token : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function saveStaffToken(token) {
+    try {
+      window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ apiBase: state.apiBase, token }));
+    } catch {
+      // Private mode: the session lasts only while this page stays open.
+    }
+    state.staffToken = token;
+  }
+
+  function clearStaffToken() {
+    state.staffToken = '';
+    try {
+      window.sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      // Ignore storage errors.
+    }
+  }
+
+  function currentStaffToken() {
+    if (!state.staffToken) state.staffToken = readStaffToken();
+    return state.staffToken || '';
+  }
+
+  function showSignIn(message = '') {
+    state.signedIn = false;
+    if (state.autoRefreshTimer) {
+      window.clearInterval(state.autoRefreshTimer);
+      state.autoRefreshTimer = null;
+    }
+    if (els.workspace) els.workspace.hidden = true;
+    if (els.signoutBtn) els.signoutBtn.hidden = true;
+    if (els.signinGate) els.signinGate.hidden = false;
+    if (els.signinApiHost) {
+      try { els.signinApiHost.textContent = new URL(state.apiBase).host; } catch { els.signinApiHost.textContent = state.apiBase; }
+    }
+    if (els.signinError) {
+      els.signinError.textContent = message;
+      els.signinError.hidden = !message;
+    }
+    if (els.signinToken) {
+      els.signinToken.value = '';
+      els.signinToken.focus();
+    }
+  }
+
+  class AuthError extends Error {}
+
   async function apiRequest(path, options = {}) {
+    const isAdminRoute = path.startsWith(ADMIN_API_PREFIX);
+    const token = isAdminRoute ? (options.staffToken || currentStaffToken()) : '';
+    if (isAdminRoute && !token) {
+      showSignIn();
+      throw new AuthError('Inicia sesión con la credencial del equipo.');
+    }
+    const { staffToken: _ignored, ...fetchOptions } = options;
     const res = await fetch(`${state.apiBase}${path}`, {
-      ...options,
+      ...fetchOptions,
+      credentials: 'omit',
       headers: {
         Accept: 'application/json',
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(options.headers || {})
+        ...(fetchOptions.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
       }
     });
     const data = await res.json().catch(() => ({}));
+    if (isAdminRoute && (res.status === 401 || res.status === 403)) {
+      if (!options.staffToken) {
+        clearStaffToken();
+        showSignIn('Tu sesión venció o la credencial ya no es válida. Ingresa de nuevo.');
+      }
+      throw new AuthError(data.error || 'Credencial del equipo no válida.');
+    }
     if (!res.ok || data.ok === false) {
       throw new Error(data.error || `Error ${res.status}`);
     }
@@ -506,6 +606,7 @@
       window.history.replaceState(null, '', `#${section}`);
     }
 
+    if (!state.signedIn) return;
     if (section === 'seo' && !state.seoLoaded) {
       loadSeo();
     } else if (section === 'content' && !state.contentLoaded) {
@@ -1148,7 +1249,7 @@
     if (els.crmError) els.crmError.hidden = true;
 
     try {
-      const data = await apiRequest('/api/public/crm');
+      const data = await apiRequest('/api/admin/crm');
       state.crm = {
         leads: Array.isArray(data.leads) ? data.leads : [],
         tasks: Array.isArray(data.tasks) ? data.tasks : [],
@@ -1180,7 +1281,7 @@
     const existing = state.crm.leads.find((l) => l.id === leadId);
     if (!existing || existing.stage === nextStage) return;
     try {
-      await apiRequest(`/api/public/crm/leads/${encodeURIComponent(leadId)}`, {
+      await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(leadId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ stage: nextStage, actor: 'Admisiones' })
       });
@@ -1195,7 +1296,7 @@
   async function toggleTaskStatus(taskId, checked) {
     const nextStatus = checked ? 'hecha' : 'pendiente';
     try {
-      await apiRequest(`/api/public/crm/tasks/${encodeURIComponent(taskId)}`, {
+      await apiRequest(`/api/admin/crm/tasks/${encodeURIComponent(taskId)}`, {
         method: 'PATCH',
         body: JSON.stringify({ status: nextStatus, actor: 'Admisiones' })
       });
@@ -1924,8 +2025,8 @@
 
     try {
       const [seoRes, contentRes] = await Promise.allSettled([
-        apiRequest(`/api/public/admin/seo?days=${days}`),
-        state.contentLoaded ? Promise.resolve(state.contentData) : apiRequest('/api/public/admin/content')
+        apiRequest(`/api/admin/seo?days=${days}`),
+        state.contentLoaded ? Promise.resolve(state.contentData) : apiRequest('/api/admin/content')
       ]);
 
       if (seoRes.status !== 'fulfilled') {
@@ -1965,7 +2066,7 @@
     els.seoAnalyzeBtn.textContent = 'Analizando evidencia…';
 
     try {
-      const res = await apiRequest('/api/public/admin/seo/analyze', {
+      const res = await apiRequest('/api/admin/seo/analyze', {
         method: 'POST',
         body: JSON.stringify({
           days: state.seoDays,
@@ -2283,7 +2384,7 @@
     if (els.contentError) els.contentError.hidden = true;
 
     try {
-      const data = await apiRequest('/api/public/admin/content');
+      const data = await apiRequest('/api/admin/content');
       state.contentData = data;
       state.contentLoaded = true;
       if (!keepSelection || !state.studioProgramSlug) {
@@ -2321,7 +2422,7 @@
     els.studioGenerateBtn.textContent = 'Generando borrador con IA…';
 
     try {
-      const res = await apiRequest('/api/public/admin/content/draft', {
+      const res = await apiRequest('/api/admin/content/draft', {
         method: 'POST',
         body: JSON.stringify({
           programSlug,
@@ -2367,7 +2468,7 @@
     els.studioSaveDraftBtn.disabled = true;
     els.studioPublishBtn.disabled = true;
     try {
-      const res = await apiRequest('/api/public/admin/content/publish', {
+      const res = await apiRequest('/api/admin/content/publish', {
         method: 'POST',
         body: JSON.stringify({
           id: state.studioArticleId || undefined,
@@ -2458,6 +2559,7 @@
 
     els.refreshAllBtn?.addEventListener('click', () => {
       checkHealth();
+      if (!state.signedIn) return;
       if (state.activeSection === 'crm') loadCrm();
       else if (state.activeSection === 'seo') loadSeo(state.seoDays);
       else if (state.activeSection === 'content') loadContent(true);
@@ -2626,7 +2728,7 @@
       };
       els.saveProfileBtn.disabled = true;
       try {
-        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(state.selectedLeadId)}`, {
+        await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(state.selectedLeadId)}`, {
           method: 'PATCH',
           body: JSON.stringify(payload)
         });
@@ -2657,7 +2759,7 @@
       els.aiDraftBtn.disabled = true;
       els.aiDraftBtn.textContent = 'Generando con Claude…';
       try {
-        const res = await apiRequest(`/api/public/crm/leads/${encodeURIComponent(state.selectedLeadId)}/ai-draft`, {
+        const res = await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(state.selectedLeadId)}/ai-draft`, {
           method: 'POST',
           body: JSON.stringify({
             template: state.selectedTemplate || 'seguimiento',
@@ -2693,7 +2795,7 @@
       els.sendNurtureBtn.disabled = true;
       els.sendNurtureBtn.textContent = 'Enviando vía Resend…';
       try {
-        const res = await apiRequest(`/api/public/crm/leads/${encodeURIComponent(state.selectedLeadId)}/nurture-email`, {
+        const res = await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(state.selectedLeadId)}/nurture-email`, {
           method: 'POST',
           body: JSON.stringify({
             subject,
@@ -2720,7 +2822,7 @@
       const dueAt = fromDatetimeLocalValue(els.newTaskDue.value);
       els.createTaskBtn.disabled = true;
       try {
-        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(state.selectedLeadId)}/tasks`, {
+        await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(state.selectedLeadId)}/tasks`, {
           method: 'POST',
           body: JSON.stringify({
             title,
@@ -2750,7 +2852,7 @@
       if (!text) return;
       els.saveNoteBtn.disabled = true;
       try {
-        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(state.selectedLeadId)}/notes`, {
+        await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(state.selectedLeadId)}/notes`, {
           method: 'POST',
           body: JSON.stringify({
             text,
@@ -2781,7 +2883,7 @@
       const targetId = state.selectedLeadId;
       els.deleteConfirm.disabled = true;
       try {
-        await apiRequest(`/api/public/crm/leads/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
+        await apiRequest(`/api/admin/crm/leads/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
         closeDrawer();
         showToast('Expediente eliminado');
         await loadCrm(true);
@@ -3072,14 +3174,63 @@
     });
   }
 
+  function startWorkspace() {
+    state.signedIn = true;
+    if (els.signinGate) els.signinGate.hidden = true;
+    if (els.workspace) els.workspace.hidden = false;
+    if (els.signoutBtn) els.signoutBtn.hidden = false;
+    switchSection(sectionFromHash(), false);
+    loadCrm();
+    setupAutoRefresh();
+  }
+
+  function bindAuthEvents() {
+    els.signinForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = (els.signinToken?.value || '').trim();
+      if (!token) return;
+      if (els.signinSubmit) els.signinSubmit.disabled = true;
+      if (els.signinError) els.signinError.hidden = true;
+      try {
+        await apiRequest('/api/admin/session', { staffToken: token });
+        saveStaffToken(token);
+        if (els.signinToken) els.signinToken.value = '';
+        startWorkspace();
+      } catch (err) {
+        if (els.signinError) {
+          els.signinError.textContent = err instanceof AuthError
+            ? 'Credencial no válida. Verifica que sea la credencial vigente del equipo.'
+            : `No se pudo conectar con el servidor (${err.message}).`;
+          els.signinError.hidden = false;
+        }
+      } finally {
+        if (els.signinSubmit) els.signinSubmit.disabled = false;
+      }
+    });
+
+    els.signoutBtn?.addEventListener('click', () => {
+      clearStaffToken();
+      // Reload so no applicant data stays in the DOM after signing out.
+      window.location.reload();
+    });
+  }
+
   async function init() {
     await Promise.all([resolveConfig(), loadCatalog()]);
     populateSelects();
     bindEvents();
+    bindAuthEvents();
     checkHealth();
-    switchSection(sectionFromHash(), false);
-    loadCrm();
-    setupAutoRefresh();
+    if (!currentStaffToken()) {
+      showSignIn();
+      return;
+    }
+    try {
+      await apiRequest('/api/admin/session');
+      startWorkspace();
+    } catch (err) {
+      if (!(err instanceof AuthError)) showSignIn(`No se pudo verificar la sesión (${err.message}).`);
+    }
   }
 
   if (document.readyState === 'loading') {

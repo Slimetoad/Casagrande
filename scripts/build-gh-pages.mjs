@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync
@@ -245,6 +246,28 @@ function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
   }
 }
 
+function listFiles(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    return entry.isDirectory() ? listFiles(full) : [full];
+  });
+}
+
+// The staff credential is entered at sign-in and kept in sessionStorage. It must never be
+// baked into the static site, even if the build machine happens to have it in its env.
+function verifyNoStaffCredential() {
+  const secrets = ['ADMISSIONS_STAFF_TOKEN', 'ADMIN_API_TOKEN']
+    .map((name) => (process.env[name] || '').trim())
+    .filter((value) => value.length >= 8);
+  for (const file of listFiles(OUT_DIR)) {
+    if (!/\.(?:html|js|json|css|txt|xml|svg)$/i.test(file)) continue;
+    const text = readFileSync(file, 'utf8');
+    if (/ADMISSIONS_STAFF_TOKEN\s*[:=]\s*["'][^"']+/.test(text) || secrets.some((value) => text.includes(value))) {
+      throw new Error(`Credencial del equipo detectada en ${file}.`);
+    }
+  }
+}
+
 function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml) {
   if (staticPrograms.length !== 34) {
     throw new Error(`Se esperaban 34 programas en el catálogo y se encontraron ${staticPrograms.length}.`);
@@ -279,10 +302,20 @@ function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml
   verifyRelativeAssetRefs(OUT_ADMIN_DIR, adminIndexHtml, adminCssContent, 'dist-pages/admin/index.html');
   verifyRelativeAssetRefs(OUT_CRM_DIR, crmRedirectHtml, '', 'dist-pages/crm/index.html');
 
+  // The Admin must only reach the authenticated /api/admin/* routes.
+  if (/\/api\/public\//.test(adminJsContent) || /\/api\/public\//.test(adminIndexHtml)) {
+    throw new Error('dist-pages/admin aún usa rutas /api/public/* sin autenticación; usa /api/admin/*.');
+  }
+  if (!adminJsContent.includes('/api/admin/session')) {
+    throw new Error('dist-pages/admin/admin.js debe iniciar sesión del equipo contra /api/admin/session.');
+  }
+  verifyNoStaffCredential();
+
   const secretPatterns = [
     /\bkey_[a-f0-9]{16,}/i,
     /\bre_[A-Za-z0-9_]{16,}/,
-    /sk-ant-[A-Za-z0-9_-]{12,}/
+    /sk-ant-[A-Za-z0-9_-]{12,}/,
+    /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/
   ];
   for (const [label, text] of [
     ['index.html', indexHtml],

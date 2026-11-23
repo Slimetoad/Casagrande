@@ -14,6 +14,13 @@ const RETELL_API_KEY = 'retell-test-signing-key';
 const INBOUND_NUMBER = '+17875550199';
 const AGENT_ID = 'agent_ucg_posgrados_ec';
 const PUBLIC_BASE_URL = 'https://slimetoad.github.io/Casagrande';
+const STAFF_TOKEN = 'test-staff-token-0123456789abcdefghijklmnop';
+
+function staffRequest(url, init = {}) {
+  const headers = new Headers(init.headers || {});
+  headers.set('Authorization', `Bearer ${STAFF_TOKEN}`);
+  return new Request(url, { ...init, headers });
+}
 
 function makeEnv(dbPath = ':memory:', overrides = {}) {
   const DB = openSqliteD1(dbPath);
@@ -33,6 +40,7 @@ function makeEnv(dbPath = ':memory:', overrides = {}) {
     RETELL_INBOUND_AGENT_ID: AGENT_ID,
     RESEND_API_KEY: 'resend-test-key',
     RESEND_FROM: 'Posgrados UCG <posgrados@example.edu>',
+    ADMISSIONS_STAFF_TOKEN: STAFF_TOKEN,
     ...overrides
   };
   return { env, DB, ctx, waits };
@@ -161,7 +169,7 @@ test('Retell inbound call_analyzed crea expediente rico en CRM, despacha resumen
   assert.match(retellEvent.description, /correo deletreado y confirmado/);
   assert.match(retellEvent.description, /teléfono confirmado por lectura/);
 
-  // Verify /api/health and /api/public/crm responses
+  // Verify /api/health and /api/admin/crm responses
   const healthRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/health'), env, ctx);
   assert.equal(healthRes.status, 200);
   const health = await healthRes.json();
@@ -174,7 +182,7 @@ test('Retell inbound call_analyzed crea expediente rico en CRM, despacha resumen
     inboundNumber: INBOUND_NUMBER
   });
 
-  const crmRes = await handleHttpRequest(new Request('https://crm.example.up.railway.app/api/public/crm'), env, ctx);
+  const crmRes = await handleHttpRequest(staffRequest('https://crm.example.up.railway.app/api/admin/crm'), env, ctx);
   assert.equal(crmRes.status, 200);
   const crm = await crmRes.json();
   assert.equal(crm.leads.length, 1);
@@ -429,7 +437,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   const baseUrl = 'https://crm.example.up.railway.app';
 
   // CORS preflight must advertise GET, POST, PATCH, DELETE, OPTIONS
-  const corsRes = await handleHttpRequest(new Request(baseUrl + '/api/public/crm/leads/abc', {
+  const corsRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/crm/leads/abc', {
     method: 'OPTIONS',
     headers: { Origin: origin }
   }), env, ctx);
@@ -454,15 +462,15 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   }), env, ctx);
   assert.equal(createRes.status, 201);
 
-  const initialCrm = await (await handleHttpRequest(new Request(baseUrl + '/api/public/crm', { headers: { Origin: origin } }), env, ctx)).json();
+  const initialCrm = await (await handleHttpRequest(staffRequest(baseUrl + '/api/admin/crm', { headers: { Origin: origin } }), env, ctx)).json();
   assert.equal(initialCrm.leads.length, 1);
   const leadId = initialCrm.leads[0].id;
   assert.ok(Array.isArray(initialCrm.tasks));
   assert.equal(initialCrm.stats.stageCounts.Nuevo, 1);
   assert.equal(initialCrm.stats.openTasks, 1);
 
-  // PATCH /api/public/crm/leads/:id (stage, score, owner, note, due_at, paused, consents)
-  const patchRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+  // PATCH /api/admin/crm/leads/:id (stage, score, owner, note, due_at, paused, consents)
+  const patchRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({
@@ -488,15 +496,15 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(patched.lead.revision, 2);
 
   // Invalid stage / score must return 422
-  const badPatch = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+  const badPatch = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stage: 'Inventada' })
   }), env, ctx);
   assert.equal(badPatch.status, 422);
 
-  // POST /api/public/crm/leads/:id/notes
-  const noteRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/notes`, {
+  // POST /api/admin/crm/leads/:id/notes
+  const noteRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ text: 'Trabaja en seguridad bancaria y prefiere tutorías virtuales.', actor: 'Carolina' })
@@ -507,8 +515,8 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(noteData.event.type, 'nota');
   assert.equal(DB.raw.prepare('SELECT note FROM leads WHERE id=?').get(leadId).note, 'Trabaja en seguridad bancaria y prefiere tutorías virtuales.');
 
-  // POST /api/public/crm/leads/:id/tasks + PATCH /api/public/crm/tasks/:taskId
-  const taskRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/tasks`, {
+  // POST /api/admin/crm/leads/:id/tasks + PATCH /api/admin/crm/tasks/:taskId
+  const taskRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ title: 'Validar título de tercer nivel', due_at: '2026-12-03T14:00:00.000Z' })
@@ -517,7 +525,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   const createdTask = (await taskRes.json()).task;
   assert.equal(createdTask.status, 'pendiente');
 
-  const taskPatchRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/tasks/${createdTask.id}`, {
+  const taskPatchRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/tasks/${createdTask.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ status: 'hecha', actor: 'Carolina' })
@@ -525,8 +533,8 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(taskPatchRes.status, 200);
   assert.equal((await taskPatchRes.json()).task.status, 'hecha');
 
-  // POST /api/public/crm/leads/:id/ai-draft (fallback template grounded in catalog)
-  const draftFallbackRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/ai-draft`, {
+  // POST /api/admin/crm/leads/:id/ai-draft (fallback template grounded in catalog)
+  const draftFallbackRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}/ai-draft`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ template: 'requisitos' })
@@ -540,7 +548,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.match(fallbackDraft.body, /Universidad Casa Grande/);
   assert.ok(fallbackDraft.recommendedAction);
 
-  // POST /api/public/crm/leads/:id/ai-draft (Anthropic mocked) + POST /nurture-email (Resend mocked)
+  // POST /api/admin/crm/leads/:id/ai-draft (Anthropic mocked) + POST /nurture-email (Resend mocked)
   const sentEmails = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     if (url === 'https://api.anthropic.com/v1/messages') {
@@ -561,7 +569,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   });
 
   const aiEnv = { ...env, ANTHROPIC_API_KEY: 'test-anthropic-key', ANTHROPIC_MODEL: 'claude-haiku-5-5' };
-  const draftAiRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/ai-draft`, {
+  const draftAiRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}/ai-draft`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ template: 'ficha' })
@@ -571,7 +579,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(aiDraft.source, 'anthropic');
   assert.match(aiDraft.subject, /Ciberseguridad/);
 
-  const sendEmailRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/nurture-email`, {
+  const sendEmailRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}/nurture-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({
@@ -594,15 +602,15 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   const nowIso = new Date().toISOString();
   DB.raw.prepare("INSERT INTO leads(id,name,email,phone,program,source,created_at,updated_at,pref_token) VALUES(?,?,?,?,?,?,?,?,?)")
     .run(phoneLeadId, 'Aspirante por teléfono', 'intake:phone:' + phoneLeadId, '+593991111111', '', 'Llamada entrante', nowIso, nowIso, 'a'.repeat(64));
-  const rejectPhoneEmail = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${phoneLeadId}/nurture-email`, {
+  const rejectPhoneEmail = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${phoneLeadId}/nurture-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject: 'Hola', body: 'Mensaje' })
   }), env, ctx);
   assert.equal(rejectPhoneEmail.status, 422);
 
-  // Verify GET /api/public/crm enriched stats, tasks, nurtureJobs
-  const enrichedCrm = await (await handleHttpRequest(new Request(baseUrl + '/api/public/crm'), env, ctx)).json();
+  // Verify GET /api/admin/crm enriched stats, tasks, nurtureJobs
+  const enrichedCrm = await (await handleHttpRequest(staffRequest(baseUrl + '/api/admin/crm'), env, ctx)).json();
   assert.equal(enrichedCrm.stats.totalLeads, 2);
   assert.equal(enrichedCrm.stats.stageCounts['En orientación'], 1);
   assert.equal(enrichedCrm.stats.stageCounts.Nuevo, 1);
@@ -610,8 +618,8 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(enrichedCrm.stats.avgScore, 44);
   assert.ok(enrichedCrm.nurtureJobs.some(j => j.provider_id === 'resend-manual-001' && j.subject === aiDraft.subject));
 
-  // DELETE /api/public/crm/leads/:id deletes lead and dependent rows cleanly
-  const delRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+  // DELETE /api/admin/crm/leads/:id deletes lead and dependent rows cleanly
+  const delRes = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}`, {
     method: 'DELETE',
     headers: { Origin: origin }
   }), env, ctx);
@@ -623,7 +631,7 @@ test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y 
   assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM conversation_nurture_jobs WHERE lead_id=?').get(leadId).n, 0);
 
   // Deleting unknown lead returns 404
-  const delMissing = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+  const delMissing = await handleHttpRequest(staffRequest(baseUrl + `/api/admin/crm/leads/${leadId}`, {
     method: 'DELETE'
   }), env, ctx);
   assert.equal(delMissing.status, 404);
@@ -667,14 +675,15 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
 
   const env = {
     DB,
-    PUBLIC_BASE_URL: PUBLIC_BASE_URL
+    PUBLIC_BASE_URL: PUBLIC_BASE_URL,
+    ADMISSIONS_STAFF_TOKEN: STAFF_TOKEN
   };
   const ctx = { waitUntil(p) { Promise.resolve(p); } };
   const origin = 'https://slimetoad.github.io';
   const baseUrl = 'https://crm.example.up.railway.app';
 
-  // 1. GET /api/public/admin/seo?days=30
-  const seoRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=30', {
+  // 1. GET /api/admin/seo?days=30
+  const seoRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/seo?days=30', {
     headers: { Origin: origin }
   }), env, ctx);
   assert.equal(seoRes.status, 200);
@@ -689,12 +698,12 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.ok(seoData.summary.avgCpcUsd > 0);
 
   // Invalid days -> 400
-  const badDays = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=15'), env, ctx);
+  const badDays = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/seo?days=15'), env, ctx);
   assert.equal(badDays.status, 400);
 
-  // 2. POST /api/public/admin/seo/analyze
+  // 2. POST /api/admin/seo/analyze
   const iaId = 'programa:maestria-en-ia-y-ciencia-de-datos';
-  const analyzeRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo/analyze', {
+  const analyzeRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/seo/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ days: 30, ids: [iaId], question: '¿Qué demanda tiene la maestría en inteligencia artificial?' })
@@ -715,8 +724,8 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.equal(insightsCorsRes.status, 200);
   assert.equal(insightsCorsRes.headers.get('Access-Control-Allow-Origin'), origin);
 
-  // 4. GET /api/public/admin/content
-  const contentRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content', {
+  // 4. GET /api/admin/content
+  const contentRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/content', {
     headers: { Origin: origin }
   }), env, ctx);
   assert.equal(contentRes.status, 200);
@@ -727,8 +736,8 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.equal(contentData.stats.plannedPrograms, programs.length);
   assert.equal(contentData.stats.publishedGuides, 0);
 
-  // 5. POST /api/public/admin/content/draft (template fallback)
-  const draftRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/draft', {
+  // 5. POST /api/admin/content/draft (template fallback)
+  const draftRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/content/draft', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({
@@ -750,8 +759,8 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   const draftGuideRes = await handleHttpRequest(new Request(baseUrl + `/guias/${draftJson.article.slug}`), env, ctx);
   assert.equal(draftGuideRes.status, 404);
 
-  // 6. POST /api/public/admin/content/publish
-  const publishRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/publish', {
+  // 6. POST /api/admin/content/publish
+  const publishRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/content/publish', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({
@@ -780,8 +789,8 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.ok(pubJson.seoChecklist.wordCount > 0);
   assert.ok(pubJson.seoChecklist.headingsCount >= 1);
 
-  // 7. Re-read GET /api/public/admin/content & GET /api/public/admin/seo to confirm publishedUrl & published guide
-  const contentAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content'), env, ctx)).json();
+  // 7. Re-read GET /api/admin/content & GET /api/admin/seo to confirm publishedUrl & published guide
+  const contentAfter = await (await handleHttpRequest(staffRequest(baseUrl + '/api/admin/content'), env, ctx)).json();
   assert.equal(contentAfter.stats.publishedGuides, 1);
   assert.ok(contentAfter.stats.coveredVolume >= 720);
   const iaPlan = contentAfter.plan.find(p => p.program === 'maestria-en-ia-y-ciencia-de-datos');
@@ -823,11 +832,11 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.match(robotsTxt, /Allow: \/guias/);
   assert.ok(robotsTxt.includes(`Sitemap: ${baseUrl}/sitemap.xml`));
 
-  const seoAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=30'), env, ctx)).json();
+  const seoAfter = await (await handleHttpRequest(staffRequest(baseUrl + '/api/admin/seo?days=30'), env, ctx)).json();
   assert.equal(seoAfter.summary.publishedGuides, 1);
   assert.ok(seoAfter.rows.some(r => r.kind === 'guia' && r.program === 'maestria-en-ia-y-ciencia-de-datos'));
 
-  // 8. POST /api/public/admin/content/draft with Anthropic mocked
+  // 8. POST /api/admin/content/draft with Anthropic mocked
   t.mock.method(globalThis, 'fetch', async (url) => {
     assert.equal(url, 'https://api.anthropic.com/v1/messages');
     return Response.json({
@@ -841,7 +850,7 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
       }]
     });
   });
-  const aiDraftRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/draft', {
+  const aiDraftRes = await handleHttpRequest(staffRequest(baseUrl + '/api/admin/content/draft', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
     body: JSON.stringify({ programSlug: 'maestria-en-ciberseguridad' })

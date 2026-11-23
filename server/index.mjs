@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openSqliteD1 } from './d1-sqlite.mjs';
-import { serve } from '../src/portal.js';
+import { serve, resolveOperator } from '../src/portal.js';
+import { secretMatches } from '../src/observability.js';
 import { brand, programs } from '../src/catalog.js';
 import { followupOnCapture } from '../src/capture-followup.js';
 import { withConversationWake } from '../src/conversation-wake.js';
@@ -29,6 +30,15 @@ const CROSS_ORIGIN_PUBLIC_PATHS = new Set([
   '/api/citas/gestionar',
   '/api/editorial/insights'
 ]);
+// Admin workspace (site/admin) API. Every route under these prefixes requires staff
+// authentication; the old /api/public/* paths are kept only to answer 401/410.
+const ADMIN_API_PREFIX = '/api/admin';
+const LEGACY_PUBLIC_PREFIX = '/api/public';
+// Identity headers that only a trusted SSO proxy may set. Railway has no such proxy,
+// so they are stripped unless TRUSTED_IDENTITY_PROXY=true is configured explicitly.
+const PROXY_IDENTITY_HEADERS = ['oai-authenticated-user-email', 'oai-authenticated-user-id'];
+export const MIN_STAFF_TOKEN_LENGTH = 32;
+const CORS_ALLOW_HEADERS = 'Authorization, Content-Type, Idempotency-Key';
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -81,7 +91,7 @@ function applyCorsHeaders(response, origin, env, requestOrigin) {
   const headers = new Headers(response.headers);
   headers.set('Access-Control-Allow-Origin', origin);
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Idempotency-Key');
+  headers.set('Access-Control-Allow-Headers', CORS_ALLOW_HEADERS);
   const vary = headers.get('Vary');
   headers.set('Vary', vary ? (vary.includes('Origin') ? vary : vary + ', Origin') : 'Origin');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -122,8 +132,48 @@ const CRM_STAGES = ['Nuevo', 'En orientación', 'En postulación', 'Admitido', '
 const VALID_SIGNAL_INTENTS = new Set(['programa', 'inversion', 'cita', 'requisitos', 'solicitar_asesor', 'baja', 'postergar', 'desconocido']);
 const EMAIL_RE = /^[^<>@\s,;]+@[^<>@\s,;]+\.[^<>@\s,;]+$/;
 
-function crmJson(data, status = 200) {
-  return Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
+function crmJson(data, status = 200, extraHeaders = {}) {
+  return Response.json(data, { status, headers: { 'Cache-Control': 'no-store', ...extraHeaders } });
+}
+
+function trustsIdentityProxy(env) {
+  return env?.TRUSTED_IDENTITY_PROXY === 'true';
+}
+
+function stripUntrustedIdentity(request, env) {
+  if (trustsIdentityProxy(env)) return request;
+  if (!PROXY_IDENTITY_HEADERS.some(name => request.headers.has(name))) return request;
+  const headers = new Headers(request.headers);
+  for (const name of PROXY_IDENTITY_HEADERS) headers.delete(name);
+  return new Request(request, { headers });
+}
+
+export function staffTokenConfigured(env) {
+  const token = typeof env?.ADMISSIONS_STAFF_TOKEN === 'string' ? env.ADMISSIONS_STAFF_TOKEN.trim() : '';
+  return token.length >= MIN_STAFF_TOKEN_LENGTH;
+}
+
+// Same staff model as the portal (README "Acceso del equipo"): `Authorization: Bearer` with
+// ADMISSIONS_STAFF_TOKEN, or an ADMISSIONS_STAFF_EMAILS identity via src/portal.js
+// resolveOperator when TRUSTED_IDENTITY_PROXY=true. Unlike the portal, the Bearer scheme is
+// mandatory and tokens shorter than MIN_STAFF_TOKEN_LENGTH never unlock data.
+export async function resolveAdminOperator(request, env) {
+  if (staffTokenConfigured(env)) {
+    const presented = (request.headers.get('authorization') || '').match(/^Bearer[ \t]+(\S+)[ \t]*$/i)?.[1];
+    if (presented && await secretMatches(presented, env.ADMISSIONS_STAFF_TOKEN.trim())) return 'Servicio de admisiones';
+  }
+  if (!trustsIdentityProxy(env)) return null;
+  // Proxy identity only; the token was already checked strictly above.
+  return resolveOperator(request, { ADMISSIONS_STAFF_EMAILS: env.ADMISSIONS_STAFF_EMAILS, ADMISSIONS_STAFF_TOKEN: '' });
+}
+
+function staffAuthRequired(request) {
+  const presented = /^Bearer\s+\S/i.test(request.headers.get('authorization') || '');
+  return crmJson(
+    { error: presented ? 'Credencial del equipo no válida o vencida.' : 'Esta sección requiere acceso del equipo de admisiones.' },
+    401,
+    { 'WWW-Authenticate': 'Bearer realm="ucg-admin"' }
+  );
 }
 
 function formatPublicLead(row) {
@@ -731,10 +781,10 @@ async function handleDeleteCrmLead(env, id) {
   return crmJson({ ok: true, deleted: id });
 }
 
-async function routePublicCrm(request, env, path) {
+async function routeAdminCrm(request, env, path) {
   if (!env.DB) return crmJson({ error: 'Base de datos no disponible.' }, 503);
 
-  if (path === '/api/public/crm') {
+  if (path === '/api/admin/crm') {
     if (['GET', 'HEAD'].includes(request.method)) {
       const res = await handlePublicCrm(env);
       return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
@@ -743,28 +793,28 @@ async function routePublicCrm(request, env, path) {
   }
 
   let match;
-  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/leads\/([\w.-]{1,120})$/))) {
     if (request.method === 'PATCH') return handlePatchCrmLead(request, env, match[1]);
     if (request.method === 'DELETE') return handleDeleteCrmLead(env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/notes$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/leads\/([\w.-]{1,120})\/notes$/))) {
     if (request.method === 'POST') return handleCreateCrmNote(request, env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/tasks$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/leads\/([\w.-]{1,120})\/tasks$/))) {
     if (request.method === 'POST') return handleCreateCrmTask(request, env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if ((match = path.match(/^\/api\/public\/crm\/tasks\/([\w.-]{1,120})$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/tasks\/([\w.-]{1,120})$/))) {
     if (request.method === 'PATCH') return handlePatchCrmTask(request, env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/nurture-email$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/leads\/([\w.-]{1,120})\/nurture-email$/))) {
     if (request.method === 'POST') return handleSendNurtureEmail(request, env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/ai-draft$/))) {
+  if ((match = path.match(/^\/api\/admin\/crm\/leads\/([\w.-]{1,120})\/ai-draft$/))) {
     if (request.method === 'POST') return handleAiDraft(request, env, match[1]);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
@@ -1327,31 +1377,31 @@ async function handleAdminContentPublish(request, env, requestUrl) {
   });
 }
 
-async function routePublicAdmin(request, env, url, path) {
+async function routeAdminWorkspace(request, env, url, path) {
   if (!env.DB) return crmJson({ error: 'Base de datos no disponible.' }, 503);
-  if (path === '/api/public/admin/seo') {
+  if (path === '/api/admin/seo') {
     if (['GET', 'HEAD'].includes(request.method)) {
       const res = await handleAdminSeoGet(env, url);
       return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
     }
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if (path === '/api/public/admin/seo/analyze') {
+  if (path === '/api/admin/seo/analyze') {
     if (request.method === 'POST') return handleAdminSeoAnalyze(request, env);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if (path === '/api/public/admin/content') {
+  if (path === '/api/admin/content') {
     if (['GET', 'HEAD'].includes(request.method)) {
       const res = await handleAdminContentGet(env, url);
       return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
     }
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if (path === '/api/public/admin/content/draft') {
+  if (path === '/api/admin/content/draft') {
     if (request.method === 'POST') return handleAdminContentDraft(request, env);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
-  if (path === '/api/public/admin/content/publish') {
+  if (path === '/api/admin/content/publish') {
     if (request.method === 'POST') return handleAdminContentPublish(request, env, url);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
@@ -1882,7 +1932,28 @@ export const defaultCtx = {
   }
 };
 
-export async function handleHttpRequest(request, env, ctx = defaultCtx) {
+function isUnderPrefix(path, prefix) {
+  return path === prefix || path.startsWith(prefix + '/');
+}
+
+async function routeAdminApi(request, env, url, path) {
+  const operator = await resolveAdminOperator(request, env);
+  if (!operator) return staffAuthRequired(request);
+  if (path === '/api/admin/session') {
+    if (!['GET', 'HEAD'].includes(request.method)) return crmJson({ error: 'Método no permitido.' }, 405);
+    return crmJson({ ok: true, operator });
+  }
+  if (isUnderPrefix(path, '/api/admin/crm')) return routeAdminCrm(request, env, path);
+  return routeAdminWorkspace(request, env, url, path);
+}
+
+function legacyAdminPathGone(path) {
+  const movedTo = path.replace(/^\/api\/public\/admin(?=\/|$)/, ADMIN_API_PREFIX).replace(/^\/api\/public(?=\/crm(?:\/|$))/, ADMIN_API_PREFIX);
+  return crmJson({ error: 'Esta ruta se retiró. Actualiza el Admin.', movedTo: movedTo.startsWith(ADMIN_API_PREFIX) ? movedTo : null }, 410);
+}
+
+export async function handleHttpRequest(rawRequest, env, ctx = defaultCtx) {
+  const request = stripUntrustedIdentity(rawRequest, env);
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
   const originHeader = request.headers.get('origin') || '';
@@ -1893,7 +1964,7 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
     }
     const headers = new Headers({
       'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Idempotency-Key',
+      'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
       'Access-Control-Max-Age': '86400',
       'Cache-Control': 'no-store'
     });
@@ -1910,16 +1981,15 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
     if (request.method === 'HEAD') {
       response = new Response(null, { status: response.status, headers: response.headers });
     }
-  } else if (path === '/api/public/crm' || path.startsWith('/api/public/crm/')) {
+  } else if (isUnderPrefix(path, ADMIN_API_PREFIX)) {
     if (!['GET', 'HEAD'].includes(request.method) && originHeader && !isAllowedOrigin(originHeader, env, url.origin)) {
       return crmJson({ error: 'Origen no permitido.' }, 403);
     }
-    response = await routePublicCrm(request, env, path);
-  } else if (path.startsWith('/api/public/admin/')) {
-    if (!['GET', 'HEAD'].includes(request.method) && originHeader && !isAllowedOrigin(originHeader, env, url.origin)) {
-      return crmJson({ error: 'Origen no permitido.' }, 403);
-    }
-    response = await routePublicAdmin(request, env, url, path);
+    response = await routeAdminApi(request, env, url, path);
+  } else if (isUnderPrefix(path, LEGACY_PUBLIC_PREFIX)) {
+    // Retired unauthenticated paths: never serve data from them. Anonymous callers get 401,
+    // authenticated staff get 410 with the new location.
+    response = (await resolveAdminOperator(request, env)) ? legacyAdminPathGone(path) : staffAuthRequired(request);
   } else if (path === '/robots.txt' && ['GET', 'HEAD'].includes(request.method)) {
     response = handlePublicRobots(url);
     if (request.method === 'HEAD') {
@@ -2046,6 +2116,9 @@ export function startServer(customEnv = null) {
       res.end(JSON.stringify({ error: status === 413 ? 'La solicitud supera el límite permitido.' : 'Error interno del servidor.' }));
     }
   });
+  if (!staffTokenConfigured(env)) {
+    console.warn(`ADMISSIONS_STAFF_TOKEN is missing or shorter than ${MIN_STAFF_TOKEN_LENGTH} characters: every /api/admin route will answer 401.`);
+  }
   server.listen(port, '0.0.0.0', () => {
     console.log(`casagrande-posgrados-crm listening on http://0.0.0.0:${port} (db: ${db.path || 'custom'})`);
   });
