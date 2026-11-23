@@ -5,6 +5,7 @@
 //   node render.mjs                       # full film -> build/product-demo.mp4
 //   node render.mjs --still 2,42.5        # PNG frames -> build/still-<t>s.png (QA)
 //   node render.mjs --fps 30 --out build/x.mp4
+//   node render.mjs --frames 0-999 --out build/part-0.mp4   # one slice; see render-parallel.sh
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -22,6 +23,7 @@ const opt = (key, fallback) => { const i = args.indexOf(key); return i >= 0 ? ar
 const FPS = Number(opt('--fps', 30));
 const outFile = path.resolve(here, opt('--out', 'build/product-demo.mp4'));
 const stillAt = opt('--still', null); // comma-separated seconds, e.g. 2,9.5,14
+const frameRange = opt('--frames', null); // e.g. 0-999: render part of the film (parallel workers)
 const EXECUTABLE = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium';
 
 // Measure each recording: total length, and the first painted frame (Playwright
@@ -84,12 +86,14 @@ if (stillAt !== null) {
 }
 
 mkdirSync(path.dirname(outFile), { recursive: true });
-const frames = Math.round(total * FPS);
+const allFrames = Math.round(total * FPS);
+const [firstFrame, lastFrame] = frameRange ? frameRange.split('-').map(Number) : [0, allFrames - 1];
+const frames = Math.min(allFrames - 1, lastFrame) - firstFrame + 1;
 const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
   '-c:v', 'libx264', '-preset', 'fast', '-crf', '17', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outFile], { stdio: ['pipe', 'inherit', 'inherit'] });
 const started = Date.now();
 for (let i = 0; i < frames; i++) {
-  await page.evaluate(time => window.renderAt(time), i / FPS);
+  await page.evaluate(time => window.renderAt(time), (firstFrame + i) / FPS);
   const jpeg = await page.screenshot({ type: 'jpeg', quality: 95 });
   if (!ff.stdin.write(jpeg)) await once(ff.stdin, 'drain');
   if (i % 150 === 0) console.log(`frame ${i}/${frames} (${((Date.now() - started) / 1000).toFixed(0)}s)`);
