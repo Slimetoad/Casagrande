@@ -532,22 +532,37 @@ async function listPhoneNumbers(apiKey) {
   return Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
 }
 
-async function upsertLlm(apiKey, existingLlmId, payload) {
+async function ensureDraftAgentVersion(apiKey, matchedAgent) {
+  const agentId = matchedAgent.agent_id;
+  const versionsRes = await retellRequest(apiKey, `/list-agent-versions/${encodeURIComponent(agentId)}`);
+  const versions = Array.isArray(versionsRes?.items) ? versionsRes.items : Array.isArray(versionsRes) ? versionsRes : [];
+  let draftEntry = versions.find((v) => v && v.is_published === false);
+  if (!draftEntry) {
+    const baseVersion =
+      matchedAgent.latest_published_version ??
+      versions.reduce((max, v) => Math.max(max, Number(v?.version ?? 0)), 0);
+    draftEntry = await retellRequest(apiKey, `/create-agent-version/${encodeURIComponent(agentId)}`, {
+      method: 'POST',
+      body: { base_version: baseVersion },
+    });
+  }
+  const draftVersion = draftEntry?.version ?? matchedAgent.latest_published_version ?? 0;
+  return retellRequest(
+    apiKey,
+    `/get-agent/${encodeURIComponent(agentId)}?version=${encodeURIComponent(draftVersion)}`,
+  );
+}
+
+async function upsertLlm(apiKey, existingLlmId, existingLlmVersion, payload) {
   if (existingLlmId) {
-    try {
-      return await retellRequest(apiKey, `/update-retell-llm/${encodeURIComponent(existingLlmId)}`, {
-        method: 'PATCH',
-        body: payload,
-      });
-    } catch (error) {
-      if (error?.status === 400 && /published/i.test(error.message)) {
-        return retellRequest(apiKey, '/create-retell-llm', {
-          method: 'POST',
-          body: payload,
-        });
-      }
-      throw error;
-    }
+    const versionQuery =
+      existingLlmVersion !== undefined && existingLlmVersion !== null
+        ? `?version=${encodeURIComponent(existingLlmVersion)}`
+        : '';
+    return retellRequest(apiKey, `/update-retell-llm/${encodeURIComponent(existingLlmId)}${versionQuery}`, {
+      method: 'PATCH',
+      body: payload,
+    });
   }
   return retellRequest(apiKey, '/create-retell-llm', {
     method: 'POST',
@@ -555,11 +570,18 @@ async function upsertLlm(apiKey, existingLlmId, payload) {
   });
 }
 
-async function upsertAgent(apiKey, existingAgentId, payload) {
+async function upsertAgent(apiKey, existingAgent, payload) {
+  const existingAgentId = existingAgent?.agent_id || null;
   if (existingAgentId) {
-    return retellRequest(apiKey, `/update-agent/${encodeURIComponent(existingAgentId)}`, {
+    const patchPayload = { ...payload };
+    delete patchPayload.response_engine;
+    const versionQuery =
+      existingAgent.version !== undefined && existingAgent.version !== null
+        ? `?version=${encodeURIComponent(existingAgent.version)}`
+        : '';
+    return retellRequest(apiKey, `/update-agent/${encodeURIComponent(existingAgentId)}${versionQuery}`, {
       method: 'PATCH',
-      body: payload,
+      body: patchPayload,
     });
   }
   return retellRequest(apiKey, '/create-agent', {
@@ -715,14 +737,16 @@ Opciones:
 
   let existingAgentDetails = null;
   let existingLlmId = null;
+  let existingLlmVersion = null;
   if (matchedAgent?.agent_id) {
-    existingAgentDetails = await retellRequest(apiKey, `/get-agent/${encodeURIComponent(matchedAgent.agent_id)}`);
+    existingAgentDetails = await ensureDraftAgentVersion(apiKey, matchedAgent);
     if (existingAgentDetails?.response_engine?.type === 'retell-llm') {
       existingLlmId = existingAgentDetails.response_engine.llm_id || null;
+      existingLlmVersion = existingAgentDetails.response_engine.version ?? null;
     }
   }
 
-  const llm = await upsertLlm(apiKey, existingLlmId, llmPayload);
+  const llm = await upsertLlm(apiKey, existingLlmId, existingLlmVersion, llmPayload);
   const llmId = llm.llm_id || existingLlmId;
 
   const agentPayload = {
@@ -753,25 +777,28 @@ Opciones:
     agentPayload.webhook_url = null;
   }
 
-  const agent = await upsertAgent(apiKey, matchedAgent?.agent_id || null, agentPayload);
+  const agent = await upsertAgent(apiKey, existingAgentDetails, agentPayload);
   const agentId = agent.agent_id;
+  const targetVersion = agent.version ?? existingAgentDetails?.version ?? 0;
 
   // Publish the agent version so inbound phone traffic serves the latest configuration.
-  try {
-    await retellRequest(apiKey, `/publish-agent-version/${encodeURIComponent(agentId)}`, {
-      method: 'POST',
-      body: { version: agent.version ?? 0 },
-    });
-  } catch (publishErr) {
-    console.warn(`Aviso al publicar agente ${agentId}: ${publishErr.message}`);
-  }
+  await retellRequest(apiKey, `/publish-agent-version/${encodeURIComponent(agentId)}`, {
+    method: 'POST',
+    body: {
+      version: targetVersion,
+      version_title: `UCG Posgrados Ecuador v${targetVersion + 1}`,
+    },
+  });
 
   let phoneOutcome = null;
   if (!opts.skipPhone) {
     phoneOutcome = await ensureUcgPhoneNumber(apiKey, agentId, opts);
   }
 
-  const verifiedAgent = await retellRequest(apiKey, `/get-agent/${encodeURIComponent(agentId)}`);
+  const verifiedAgent = await retellRequest(
+    apiKey,
+    `/get-agent/${encodeURIComponent(agentId)}?version=${encodeURIComponent(targetVersion)}`,
+  );
   const verifiedPhones = await listPhoneNumbers(apiKey);
   const targetPhoneNumber = phoneOutcome?.phone?.phone_number || opts.phone || null;
   const verifiedPhone = targetPhoneNumber
