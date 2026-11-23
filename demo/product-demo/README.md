@@ -5,7 +5,7 @@ the GitHub Pages portal, the AI admissions officer (Retell phone line), the Admi
 CRM, SEO Analysis and the Content Engine. Screen scenes are real Playwright recordings
 of the platform running locally with fictitious applicants. Motion graphics, titles and
 diagrams are HTML + GSAP rendered frame by frame. The voiceover is Kokoro (`af_heart`).
-The soundtrack is composed procedurally and scored to the edit.
+The soundtrack is an openly licensed track (see `MUSIC_CREDITS.md`).
 
 ## Pipeline
 
@@ -15,13 +15,13 @@ The soundtrack is composed procedurally and scored to the edit.
 | 2. Screen recordings | `capture.mjs` | `clips/*.webm` |
 | 3. Voiceover | `narrate.py` | `narration/*.wav`, `narration.json` |
 | 4. Picture | `render.mjs` (+ `index.html`, `demo.js`, `demo.css`) | `product-demo.mp4`, `timeline.json` |
-| 5. Music | `music.py` | `music.wav` |
+| 5. Music | `music.py <track>` | `music.wav` |
 | 6. Mix and mux | `mix.py` | `product-demo-final.mp4` |
 
 Scene lengths follow the narration: `render.mjs` passes `narration.json` to the page,
 and each scene stretches to fit its line. Recordings play at 0.8× to 1.3× to match.
-`music.py` reads `timeline.json`, so builds, risers and impacts land on the cuts, and
-`mix.py` ducks the music under the voice.
+`music.py` loops or trims the track to the film's length and fades it; `mix.py` ducks it
+under the narration and normalizes the result to -16 LUFS.
 
 ## Run it
 
@@ -40,7 +40,8 @@ node capture.mjs                     # portal catalog form crm lead seo content
 python3 -m venv .venv && .venv/bin/pip install kokoro-onnx soundfile huggingface_hub numpy scipy
 .venv/bin/python narrate.py
 node render.mjs                      # node render.mjs --still 12,60 for quick checks
-.venv/bin/python music.py
+curl -L -o build/music/Inspired.mp3 https://incompetech.com/music/royalty-free/mp3-royaltyfree/Inspired.mp3
+.venv/bin/python music.py build/music/Inspired.mp3
 .venv/bin/python mix.py              # build/product-demo-final.mp4
 ```
 
@@ -54,7 +55,7 @@ scene moves the applicant the form creates.
 - Narration: `narration/lines.json` (one line per scene id).
 - Scenes, captions, stat cards and order: the `plan` array in `demo.js`.
 - Interactions: `scenarios` in `capture.mjs`.
-- Music: tempo, chords and section energy at the top of `music.py`; mix levels in `mix.py`.
+- Music: swap the track by passing another file to `music.py`; levels are `MUSIC_UNDER` and `MUSIC_BED` in `mix.py`.
 
 ## What the film claims, and where it comes from
 
