@@ -746,6 +746,10 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.equal(draftJson.article.program, 'maestria-en-ia-y-ciencia-de-datos');
   assert.ok(draftJson.article.body.length > 100);
 
+  // Unpublished draft slug must return 404 on /guias/:slug
+  const draftGuideRes = await handleHttpRequest(new Request(baseUrl + `/guias/${draftJson.article.slug}`), env, ctx);
+  assert.equal(draftGuideRes.status, 404);
+
   // 6. POST /api/public/admin/content/publish
   const publishRes = await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content/publish', {
     method: 'POST',
@@ -756,7 +760,7 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
       slug: draftJson.article.slug,
       title: 'Guía oficial: Maestría en IA y Ciencia de Datos UCG',
       summary: 'Conoce la modalidad en línea, duración y enfoque de la Maestría en IA de la Universidad Casa Grande.',
-      body: draftJson.article.body + '\n\nActualizado desde Content Engine.',
+      body: draftJson.article.body + '\n\n## Conclusión\n\nActualizado desde Content Engine.',
       status: 'published'
     })
   }), env, ctx);
@@ -766,14 +770,58 @@ test('endpoints Admin SEO Analysis y Content Engine funcionan con CORS y persist
   assert.equal(pubJson.ok, true);
   assert.equal(pubJson.article.status, 'published');
   assert.ok(pubJson.article.publishedAt);
+  const expectedGuideUrl = `${baseUrl}/guias/${draftJson.article.slug}`;
+  assert.equal(pubJson.publishedUrl, expectedGuideUrl);
+  assert.equal(pubJson.article.publishedUrl, expectedGuideUrl);
+  assert.equal(pubJson.seoChecklist.indexable, true);
+  assert.equal(pubJson.seoChecklist.hasCanonical, true);
+  assert.equal(pubJson.seoChecklist.hasStructuredData, true);
+  assert.equal(pubJson.seoChecklist.hasOpenGraph, true);
+  assert.ok(pubJson.seoChecklist.wordCount > 0);
+  assert.ok(pubJson.seoChecklist.headingsCount >= 1);
 
-  // 7. Re-read GET /api/public/admin/content & GET /api/public/admin/seo to confirm published guide shows up
+  // 7. Re-read GET /api/public/admin/content & GET /api/public/admin/seo to confirm publishedUrl & published guide
   const contentAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/content'), env, ctx)).json();
   assert.equal(contentAfter.stats.publishedGuides, 1);
   assert.ok(contentAfter.stats.coveredVolume >= 720);
   const iaPlan = contentAfter.plan.find(p => p.program === 'maestria-en-ia-y-ciencia-de-datos');
   assert.equal(iaPlan.status, 'published');
   assert.equal(iaPlan.title, 'Guía oficial: Maestría en IA y Ciencia de Datos UCG');
+  assert.equal(iaPlan.publishedUrl, expectedGuideUrl);
+  assert.equal(contentAfter.articles.find(a => a.id === draftJson.article.id)?.publishedUrl, expectedGuideUrl);
+
+  // 7b. Verify SEO-optimized public /guias/:slug, /guias, /sitemap.xml, and /robots.txt
+  const guideRes = await handleHttpRequest(new Request(expectedGuideUrl), env, ctx);
+  assert.equal(guideRes.status, 200);
+  assert.equal(guideRes.headers.get('X-Robots-Tag'), null);
+  const guideHtml = await guideRes.text();
+  assert.match(guideHtml, /<meta name="robots" content="index, follow/);
+  assert.match(guideHtml, new RegExp(`<link rel="canonical" href="${expectedGuideUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}">`));
+  assert.match(guideHtml, /<meta property="og:type" content="article">/);
+  assert.match(guideHtml, /"@type":"Article"/);
+  assert.match(guideHtml, /"@type":"BreadcrumbList"/);
+  assert.match(guideHtml, /"@type":"Course"/);
+  assert.match(guideHtml, /<h1[^>]*>Guía oficial: Maestría en IA y Ciencia de Datos UCG<\/h1>/);
+  assert.match(guideHtml, /<h2 id="sec-/);
+
+  const indexRes = await handleHttpRequest(new Request(baseUrl + '/guias'), env, ctx);
+  assert.equal(indexRes.status, 200);
+  assert.equal(indexRes.headers.get('X-Robots-Tag'), null);
+  const indexHtml = await indexRes.text();
+  assert.match(indexHtml, /<meta name="robots" content="index, follow/);
+  assert.ok(indexHtml.includes(expectedGuideUrl));
+
+  const sitemapRes = await handleHttpRequest(new Request(baseUrl + '/sitemap.xml'), env, ctx);
+  assert.equal(sitemapRes.status, 200);
+  const sitemapXml = await sitemapRes.text();
+  assert.ok(sitemapXml.includes(`<loc>${baseUrl}/guias</loc>`));
+  assert.ok(sitemapXml.includes(`<loc>${expectedGuideUrl}</loc>`));
+
+  const robotsRes = await handleHttpRequest(new Request(baseUrl + '/robots.txt'), env, ctx);
+  assert.equal(robotsRes.status, 200);
+  const robotsTxt = await robotsRes.text();
+  assert.match(robotsTxt, /Allow: \/guias/);
+  assert.ok(robotsTxt.includes(`Sitemap: ${baseUrl}/sitemap.xml`));
 
   const seoAfter = await (await handleHttpRequest(new Request(baseUrl + '/api/public/admin/seo?days=30'), env, ctx)).json();
   assert.equal(seoAfter.summary.publishedGuides, 1);

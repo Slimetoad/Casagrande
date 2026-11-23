@@ -249,35 +249,110 @@
         </div>
       </div>
 
-      <div class="kpi-grid kpi-grid-5">
-        <article class="kpi-card">
-          <span class="kpi-label">Páginas Analizadas</span>
-          <strong id="seo-kpi-pages" class="kpi-value">—</strong>
-          <small>Fichas y guías activas</small>
-        </article>
-        <article class="kpi-card">
-          <span class="kpi-label">Búsquedas Mensuales EC</span>
+      <div class="kpi-grid kpi-grid-5 seo-kpi-strip">
+        <article class="kpi-card kpi-accent-orange">
+          <span class="kpi-label">Demanda Mensual Ecuador</span>
           <strong id="seo-kpi-volume" class="kpi-value">—</strong>
-          <small>Demanda estimada total</small>
+          <small id="seo-kpi-volume-sub">Búsquedas mensuales OpenSEO</small>
         </article>
-        <article class="kpi-card">
-          <span class="kpi-label">CPC Promedio USD</span>
+        <article class="kpi-card kpi-accent-emerald">
+          <span class="kpi-label">Valor Tráfico Orgánico Est.</span>
+          <strong id="seo-kpi-traffic-value" class="kpi-value">—</strong>
+          <small>Equivalente mensual en Google Ads</small>
+        </article>
+        <article class="kpi-card kpi-accent-indigo">
+          <span class="kpi-label">Victorias Rápidas (KD 0)</span>
+          <strong id="seo-kpi-quickwins" class="kpi-value">—</strong>
+          <small id="seo-kpi-quickwins-sub">Baja dificultad con volumen</small>
+        </article>
+        <article class="kpi-card kpi-accent-amber">
+          <span class="kpi-label">CPC Promedio Competitivo</span>
           <strong id="seo-kpi-cpc" class="kpi-value">—</strong>
-          <small>Valor por clic en Ecuador</small>
+          <small id="seo-kpi-cpc-sub">Presión de puja en Ecuador</small>
         </article>
-        <article class="kpi-card">
-          <span class="kpi-label">Programas con Volumen</span>
-          <strong id="seo-kpi-with-vol" class="kpi-value">—</strong>
-          <small>De 34 maestrías UCG</small>
-        </article>
-        <article class="kpi-card">
-          <span class="kpi-label">Guías Publicadas</span>
-          <strong id="seo-kpi-guides" class="kpi-value">—</strong>
-          <small>Contenido editorial activo</small>
+        <article class="kpi-card kpi-accent-slate">
+          <span class="kpi-label">Cobertura Editorial</span>
+          <strong id="seo-kpi-coverage" class="kpi-value">—</strong>
+          <div class="kpi-progress-track" aria-hidden="true">
+            <div id="seo-coverage-bar" class="kpi-progress-fill" style="width:0%"></div>
+          </div>
+          <small id="seo-kpi-coverage-sub">Guías publicadas vs catálogo</small>
         </article>
       </div>
 
       <div id="seo-error" class="alert-banner alert-error" role="alert" hidden></div>
+
+      <!-- 4 INTERACTIVE SVG VISUALIZATIONS -->
+      <div class="seo-viz-grid" aria-label="Visualizaciones competitivas SEO">
+        <!-- A. Competitive Opportunity Bubble Matrix -->
+        <article class="panel-card seo-viz-card seo-viz-wide">
+          <div class="viz-head">
+            <div>
+              <span class="badge badge-retell">Matriz Competitiva OpenSEO EC</span>
+              <h2>Matriz de Oportunidad: Volumen vs. CPC (USD)</h2>
+              <p class="table-sub">Tamaño = valor mensual estimado (Vol × CPC). Color = estado editorial actual.</p>
+            </div>
+            <div class="viz-legend">
+              <span><i class="legend-dot dot-gap"></i>Sin guía</span>
+              <span><i class="legend-dot dot-draft"></i>Borrador</span>
+              <span><i class="legend-dot dot-pub"></i>Publicada</span>
+            </div>
+          </div>
+          <div id="seo-chart-matrix-wrap" class="svg-matrix-wrap">
+            <div id="seo-chart-matrix" class="svg-mount"></div>
+            <div id="seo-matrix-tooltip" class="svg-tooltip" hidden></div>
+          </div>
+          <div id="seo-matrix-selected-bar" class="matrix-selected-bar" hidden></div>
+        </article>
+
+        <!-- B. Area Demand & Ad Value Bar Chart -->
+        <article class="panel-card seo-viz-card">
+          <div class="viz-head">
+            <div>
+              <span class="badge badge-neutral">Demanda por Facultad</span>
+              <h2>Demanda y Valor por Área</h2>
+              <p class="table-sub">Clic en una barra para filtrar tabla y plan.</p>
+            </div>
+          </div>
+          <div id="seo-chart-areas" class="svg-mount"></div>
+        </article>
+
+        <!-- C. Editorial Coverage & Search Intent / Difficulty Donuts -->
+        <article class="panel-card seo-viz-card">
+          <div class="viz-head">
+            <div>
+              <span class="badge badge-neutral">Salud del Catálogo</span>
+              <h2>Cobertura, Intención y Dificultad</h2>
+              <p class="table-sub">Distribución de las 34 maestrías UCG.</p>
+            </div>
+          </div>
+          <div id="seo-chart-donuts" class="donuts-mount"></div>
+        </article>
+
+        <!-- D. Top 8 High-ROI Ecuador Keywords -->
+        <article class="panel-card seo-viz-card seo-viz-wide-sm">
+          <div class="viz-head">
+            <div>
+              <span class="badge badge-ok">Prioridad Orgánica</span>
+              <h2>Top 8 Keywords de Mayor Retorno en Ecuador</h2>
+              <p class="table-sub">Ordenadas por demanda mensual, CPC y brecha editorial.</p>
+            </div>
+          </div>
+          <div id="seo-top-keywords" class="top-keywords-grid"></div>
+        </article>
+      </div>
+
+      <!-- COMPETITIVE SEARCH USER-ACQUISITION PLAYBOOK -->
+      <section id="seo-playbook-section" class="playbook-section" aria-label="Plan de Acción para Captar Aspirantes">
+        <div class="playbook-head">
+          <div>
+            <span class="badge badge-retell">Estrategia Basada en Datos Reales</span>
+            <h2>Plan de Acción para Captar Aspirantes (Search + Voz IA + CRM)</h2>
+            <p class="section-sub">Recomendaciones tácticas generadas en tiempo real cruzando demanda OpenSEO, brechas del Motor de Contenidos y leads activos del CRM.</p>
+          </div>
+        </div>
+        <div id="seo-playbook" class="playbook-grid"></div>
+      </section>
 
       <div class="seo-layout">
         <div class="panel-card seo-table-panel">
@@ -300,6 +375,7 @@
               <select id="seo-opportunity-filter">
                 <option value="">Todas las páginas</option>
                 <option value="volume">Con volumen EC</option>
+                <option value="quickwin">Victorias rápidas (KD 0)</option>
                 <option value="no_guide">Sin guía publicada</option>
                 <option value="high_cpc">CPC alto (≥ $4 USD)</option>
                 <option value="portal_activity">Con actividad en portal</option>
@@ -319,12 +395,13 @@
                   <th class="col-check"><input id="seo-check-all" type="checkbox" aria-label="Seleccionar todas las filas visibles"></th>
                   <th>Programa / Página</th>
                   <th>Target Keyword EC</th>
+                  <th>Oportunidad</th>
                   <th>Volumen</th>
                   <th>CPC USD</th>
-                  <th>Comp. / Dif.</th>
-                  <th>Intención</th>
+                  <th>Valor est./mes</th>
+                  <th>Comp. / KD</th>
                   <th>Portal (Vistas / Leads)</th>
-                  <th>Guía</th>
+                  <th>Acción</th>
                 </tr>
               </thead>
               <tbody id="seo-table-body"></tbody>
@@ -403,7 +480,7 @@
 
       <div class="content-layout">
         <!-- LEFT: 34-PROGRAM EDITORIAL PLAN QUEUE -->
-        <div class="panel-card content-queue-panel">
+        <div id="content-queue" class="panel-card content-queue-panel">
           <div class="content-filters-row">
             <label class="search-box">
               <span class="sr-only">Buscar programa en el plan editorial</span>
@@ -480,6 +557,18 @@
             </div>
 
             <div id="studio-preview-pane" class="studio-preview" hidden></div>
+
+            <div id="ce-published-banner" class="published-banner" hidden>
+              <div class="published-banner-head">
+                <span class="badge badge-ok">Página SEO publicada y activa</span>
+                <div class="published-banner-actions">
+                  <a id="ce-published-open" class="btn btn-primary btn-sm" href="#" target="_blank" rel="noopener noreferrer">Abrir página publicada ↗</a>
+                  <button id="ce-copy-url-btn" type="button" class="btn btn-outline btn-sm">Copiar enlace</button>
+                </div>
+              </div>
+              <a id="ce-published-url" class="published-url-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+              <div id="ce-seo-chips" class="seo-chips-row"></div>
+            </div>
 
             <div class="studio-footer">
               <span id="studio-meta-status" class="table-sub">Selecciona un programa para editar o generar un borrador.</span>

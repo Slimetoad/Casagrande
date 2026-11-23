@@ -774,6 +774,162 @@ async function routePublicCrm(request, env, path) {
 const SEO_PERIODS = new Set([7, 30, 90]);
 const DEFAULT_SEO_QUESTION = '¿Qué hallazgos merecen atención y qué páginas conviene investigar primero?';
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const PORTAL_DEFAULT_URL = 'https://slimetoad.github.io/Casagrande';
+
+function publicGuideUrl(requestUrl, slug) {
+  return `${requestUrl.origin}/guias/${encodeURIComponent(slug)}`;
+}
+
+function escHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
+
+function safeJsonLd(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function trimMetaDesc(value, max = 160) {
+  const plain = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (plain.length <= max) return plain;
+  const cut = plain.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
+
+function headingSlug(value, index, used) {
+  const base = normalized(value).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || `seccion-${index + 1}`;
+  let candidate = `sec-${base}`;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `sec-${base}-${suffix++}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function renderInlineMarkdown(text) {
+  return escHtml(text).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderMarkdownAndToc(rawBody) {
+  const lines = String(rawBody ?? '').replace(/\r\n/g, '\n').split('\n');
+  const toc = [];
+  const usedIds = new Set();
+  const html = [];
+  let listType = null;
+  let paragraph = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    if (paragraph.length >= 2 && !/^#{1,6}\s/.test(paragraph[0]) && paragraph[0].length <= 95 && !/[.!?]$/.test(paragraph[0].trim())) {
+      const headingText = paragraph[0].trim();
+      const id = headingSlug(headingText, toc.length, usedIds);
+      toc.push({ id, text: headingText });
+      html.push(`<h2 id="${escHtml(id)}">${renderInlineMarkdown(headingText)}</h2>`);
+      const rest = paragraph.slice(1).join(' ').trim();
+      if (rest) html.push(`<p>${renderInlineMarkdown(rest)}</p>`);
+    } else {
+      html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+    }
+    paragraph = [];
+  };
+
+  const closeList = () => {
+    if (!listType) return;
+    html.push(listType === 'ol' ? '</ol>' : '</ul>');
+    listType = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    const h2 = line.match(/^##\s+(.+)$/);
+    if (h2) {
+      flushParagraph();
+      closeList();
+      const text = h2[1].trim();
+      const id = headingSlug(text, toc.length, usedIds);
+      toc.push({ id, text });
+      html.push(`<h2 id="${escHtml(id)}">${renderInlineMarkdown(text)}</h2>`);
+      continue;
+    }
+    const h3 = line.match(/^###\s+(.+)$/);
+    if (h3) {
+      flushParagraph();
+      closeList();
+      html.push(`<h3>${renderInlineMarkdown(h3[1].trim())}</h3>`);
+      continue;
+    }
+    const ul = line.match(/^[-*•]\s+(.+)$/);
+    if (ul) {
+      flushParagraph();
+      if (listType !== 'ul') {
+        closeList();
+        listType = 'ul';
+        html.push('<ul>');
+      }
+      html.push(`<li>${renderInlineMarkdown(ul[1].trim())}</li>`);
+      continue;
+    }
+    const ol = line.match(/^\d+[.)]\s+(.+)$/);
+    if (ol) {
+      flushParagraph();
+      if (listType !== 'ol') {
+        closeList();
+        listType = 'ol';
+        html.push('<ol>');
+      }
+      html.push(`<li>${renderInlineMarkdown(ol[1].trim())}</li>`);
+      continue;
+    }
+    closeList();
+    paragraph.push(line);
+  }
+  flushParagraph();
+  closeList();
+  return { html: html.join('\n'), toc };
+}
+
+function buildSeoChecklist(article, program) {
+  const title = String(article?.title || '');
+  const summary = String(article?.summary || '');
+  const body = String(article?.body || '');
+  const plainBody = body.replace(/^#{1,6}\s+/gm, '').replace(/[*_`]/g, ' ');
+  const wordCount = plainBody.trim() ? plainBody.trim().split(/\s+/).length : 0;
+  const readingMinutes = Math.max(1, Math.ceil(wordCount / 200));
+  const { toc } = renderMarkdownAndToc(body);
+  const subHeadings = (body.match(/^###\s+/gm) || []).length;
+  const headingsCount = toc.length + subHeadings;
+  const keyword = String(article?.sourceQuery || article?.source_query || program?.shortTitle || '').trim();
+  const fullText = normalized(`${title} ${summary} ${body}`);
+  const normKw = normalized(keyword);
+  const kwTokens = normKw.split(/[^a-z0-9]+/).filter(w => w.length > 3);
+  const hasKeyword = Boolean(
+    normKw && (fullText.includes(normKw) || (kwTokens.length > 0 && kwTokens.every(w => fullText.includes(w))))
+  );
+  return {
+    titleLength: title.length,
+    summaryLength: summary.length,
+    wordCount,
+    readingMinutes,
+    headingsCount,
+    hasKeyword,
+    indexable: article?.status === 'published',
+    hasCanonical: true,
+    hasStructuredData: true,
+    hasOpenGraph: true
+  };
+}
 
 async function handleAdminSeoGet(env, url) {
   const daysRaw = url.searchParams.get('days');
@@ -837,7 +993,7 @@ async function ensureEditorialSeeded(env) {
   await ensurePlan(env.DB, programs, new Date(), 'Admin', force);
 }
 
-async function handleAdminContentGet(env) {
+async function handleAdminContentGet(env, requestUrl) {
   await ensureEditorialSeeded(env);
   const [editorial, articlesRes, planRes] = await Promise.all([
     publicEditorial(env, programs),
@@ -851,7 +1007,13 @@ async function handleAdminContentGet(env) {
       FROM seo_editorial_plan ORDER BY priority DESC, id ASC`).all()
   ]);
 
-  const articles = articlesRes.results || [];
+  const programMap = new Map(programs.map(p => [p.slug, p]));
+  const articles = (articlesRes.results || []).map(a => {
+    const prog = programMap.get(a.program) || null;
+    const publishedUrl = a.status === 'published' ? publicGuideUrl(requestUrl, a.slug) : null;
+    const seoChecklist = buildSeoChecklist(a, prog);
+    return { ...a, publishedUrl, seoChecklist };
+  });
   const planRows = planRes.results || [];
   const articleByOpp = new Map(articles.map(a => [a.opportunity_id, a]));
   const articleByProgram = new Map();
@@ -859,7 +1021,6 @@ async function handleAdminContentGet(env) {
     if (!articleByProgram.has(a.program)) articleByProgram.set(a.program, a);
   }
   const marketByProgram = new Map(marketSnapshot.map(m => [m.program, m]));
-  const programMap = new Map(programs.map(p => [p.slug, p]));
 
   const plan = planRows.map(row => {
     const prog = programMap.get(row.program);
@@ -867,6 +1028,8 @@ async function handleAdminContentGet(env) {
     const ev = safeJson(row.evidence, {});
     const article = articleByOpp.get('editorial:' + row.id) || articleByProgram.get(row.program) || null;
     const effectiveStatus = article?.status || row.status || 'planned';
+    const articleSlug = article?.slug || (prog ? 'guia-' + prog.slug : row.id);
+    const publishedUrl = effectiveStatus === 'published' && articleSlug ? publicGuideUrl(requestUrl, articleSlug) : null;
     return {
       id: row.id,
       program: row.program,
@@ -887,7 +1050,9 @@ async function handleAdminContentGet(env) {
       scheduledAt: row.scheduled_at,
       sourceUrl: row.source_url || prog?.url || brand.catalogUrl,
       articleId: article?.id || null,
-      articleSlug: article?.slug || (prog ? 'guia-' + prog.slug : row.id),
+      articleSlug,
+      publishedUrl,
+      seoChecklist: article?.seoChecklist || null,
       title: article?.title || row.draft_title || row.title,
       summary: article?.summary || row.draft_summary || '',
       body: article?.body || row.draft_body || '',
@@ -1073,7 +1238,7 @@ async function handleAdminContentDraft(request, env) {
   return crmJson({ ok: true, source, article: savedArticle });
 }
 
-async function handleAdminContentPublish(request, env) {
+async function handleAdminContentPublish(request, env, requestUrl) {
   const body = await readJsonBody(request);
   if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
   const programSlug = clean(body.programSlug, 160);
@@ -1151,7 +1316,15 @@ async function handleAdminContentPublish(request, env) {
       FROM seo_articles WHERE id = ?`).bind(articleId)
   );
   const results = await env.DB.batch(batch);
-  return crmJson({ ok: true, article: results.at(-1)?.results?.[0] });
+  const saved = results.at(-1)?.results?.[0];
+  const publishedUrl = saved?.status === 'published' ? publicGuideUrl(requestUrl, saved.slug) : null;
+  const seoChecklist = buildSeoChecklist(saved, program);
+  return crmJson({
+    ok: true,
+    publishedUrl,
+    seoChecklist,
+    article: { ...saved, publishedUrl, seoChecklist }
+  });
 }
 
 async function routePublicAdmin(request, env, url, path) {
@@ -1169,7 +1342,7 @@ async function routePublicAdmin(request, env, url, path) {
   }
   if (path === '/api/public/admin/content') {
     if (['GET', 'HEAD'].includes(request.method)) {
-      const res = await handleAdminContentGet(env);
+      const res = await handleAdminContentGet(env, url);
       return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
     }
     return crmJson({ error: 'Método no permitido.' }, 405);
@@ -1179,10 +1352,463 @@ async function routePublicAdmin(request, env, url, path) {
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
   if (path === '/api/public/admin/content/publish') {
-    if (request.method === 'POST') return handleAdminContentPublish(request, env);
+    if (request.method === 'POST') return handleAdminContentPublish(request, env, url);
     return crmJson({ error: 'Método no permitido.' }, 405);
   }
   return crmJson({ error: 'Ruta de Admin no encontrada.' }, 404);
+}
+
+function portalBaseFromEnv(env) {
+  const raw = typeof env?.PUBLIC_BASE_URL === 'string' ? env.PUBLIC_BASE_URL.trim().replace(/\/+$/, '') : '';
+  return raw || PORTAL_DEFAULT_URL;
+}
+
+function formatDisplayPhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return raw || '+1 (912) 491-5544';
+}
+
+function formatEcDate(iso) {
+  const ts = Date.parse(iso || '');
+  if (!Number.isFinite(ts)) return '';
+  try {
+    return new Intl.DateTimeFormat('es-EC', { dateStyle: 'long', timeZone: 'America/Guayaquil' }).format(new Date(ts));
+  } catch {
+    return String(iso).slice(0, 10);
+  }
+}
+
+function seoPageShell({ title, headTags, headerHtml, mainHtml, footerHtml }) {
+  return `<!doctype html>
+<html lang="es-EC">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(title)}</title>
+${headTags}
+<style>
+  :root{--bg:#f7f8fa;--surface:#ffffff;--ink:#141920;--muted:#4d5866;--border:#e2e6ec;--accent:#ff8300;--accent-dark:#d96e00;--slate:#141920}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.68}
+  a{color:var(--accent-dark);text-decoration-thickness:1px;text-underline-offset:3px}
+  a:hover{color:var(--accent)}
+  .topbar{background:var(--slate);color:#fff;border-bottom:3px solid var(--accent)}
+  .wrap{max-width:70rem;margin:0 auto;padding:0 1.25rem}
+  .topbar-inner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;padding:.9rem 0}
+  .brand{display:flex;align-items:center;gap:.75rem;color:#fff;text-decoration:none;font-weight:700;letter-spacing:-.01em}
+  .brand img{height:34px;width:auto}
+  .nav-links{display:flex;flex-wrap:wrap;align-items:center;gap:1rem;font-size:.94rem}
+  .nav-links a{color:#e6ebf2;text-decoration:none;font-weight:500}
+  .nav-links a:hover{color:var(--accent)}
+  .phone-pill{background:rgba(255,131,0,.16);border:1px solid rgba(255,131,0,.45);color:#ffd2a1 !important;padding:.38rem .78rem;border-radius:999px;font-weight:600 !important;white-space:nowrap}
+  .breadcrumbs{padding:1.1rem 0 .2rem;font-size:.9rem;color:var(--muted)}
+  .breadcrumbs ol{list-style:none;display:flex;flex-wrap:wrap;gap:.45rem;margin:0;padding:0}
+  .breadcrumbs li+li::before{content:"/";margin-right:.45rem;color:#9aa5b4}
+  .layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:2rem;padding:1.25rem 0 3.5rem;align-items:start}
+  @media(max-width:920px){.layout{grid-template-columns:1fr}}
+  .article-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:2rem;box-shadow:0 8px 28px rgba(20,25,32,.04)}
+  @media(max-width:600px){.article-card{padding:1.25rem}}
+  .kicker{display:inline-block;background:#fff4e8;color:#9e4f00;font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:.28rem .65rem;border-radius:999px;margin-bottom:.75rem}
+  h1{font-size:clamp(1.75rem,3.3vw,2.5rem);line-height:1.16;letter-spacing:-.025em;margin:.25rem 0 .9rem}
+  .lead{font-size:1.12rem;color:#2f3a47;margin:0 0 1.15rem}
+  .meta-bar{display:flex;flex-wrap:wrap;gap:.85rem 1.25rem;font-size:.88rem;color:var(--muted);padding-bottom:1.15rem;border-bottom:1px solid var(--border);margin-bottom:1.4rem}
+  .hero-media{margin:0 0 1.6rem;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#eef1f5;aspect-ratio:16/9}
+  .hero-media img{width:100%;height:100%;object-fit:cover;object-position:50% 15%;display:block}
+  .toc{background:#f9fafb;border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1.75rem}
+  .toc-title{font-size:.88rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink);margin:0 0 .5rem}
+  .toc ul{margin:0;padding-left:1.15rem}
+  .toc li{margin:.28rem 0;font-size:.95rem}
+  .prose h2{font-size:1.42rem;line-height:1.25;margin:1.9rem 0 .7rem;color:var(--ink);scroll-margin-top:1.5rem}
+  .prose h3{font-size:1.14rem;margin:1.35rem 0 .5rem;color:var(--ink)}
+  .prose p{margin:0 0 1rem;color:#26303c}
+  .prose ul,.prose ol{margin:0 0 1.15rem;padding-left:1.35rem;color:#26303c}
+  .prose li{margin:.35rem 0}
+  .sidebar{display:grid;gap:1.25rem;position:sticky;top:1.25rem}
+  .side-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.35rem;box-shadow:0 6px 20px rgba(20,25,32,.04)}
+  .side-box h2{font-size:1.05rem;margin:0 0 .85rem}
+  .facts{margin:0;display:grid;gap:.65rem}
+  .facts div{border-bottom:1px dashed var(--border);padding-bottom:.55rem}
+  .facts dt{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+  .facts dd{margin:.12rem 0 0;font-size:.95rem;font-weight:600;color:var(--ink)}
+  .cta-box{background:linear-gradient(135deg,#141920 0%,#1f2937 100%);color:#fff;border-radius:14px;padding:1.45rem;border-top:4px solid var(--accent)}
+  .cta-box h2{margin:0 0 .5rem;font-size:1.12rem;color:#fff}
+  .cta-box p{margin:0 0 1rem;font-size:.92rem;color:#d6dde6}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;width:100%;padding:.72rem 1rem;border-radius:10px;font-weight:700;text-decoration:none;font-size:.95rem;margin-bottom:.55rem;box-sizing:border-box}
+  .btn-primary{background:var(--accent);color:#141920 !important}
+  .btn-primary:hover{background:#ff9729}
+  .btn-ghost{background:rgba(255,255,255,.1);color:#fff !important;border:1px solid rgba(255,255,255,.22)}
+  .related-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.1rem;margin-top:1rem}
+  .guide-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.25rem;display:flex;flex-direction:column;justify-content:space-between;gap:.65rem}
+  .guide-card h3{font-size:1.05rem;margin:0;line-height:1.3}
+  .guide-card p{font-size:.9rem;color:var(--muted);margin:0}
+  .footer{background:#fff;border-top:1px solid var(--border);padding:1.75rem 0;color:var(--muted);font-size:.88rem}
+  .footer-inner{display:flex;flex-wrap:wrap;justify-content:space-between;gap:1rem}
+</style>
+</head>
+<body>
+${headerHtml}
+<main class="wrap">
+${mainHtml}
+</main>
+${footerHtml}
+</body>
+</html>`;
+}
+
+function renderSeoChrome(env, requestUrl) {
+  const portalBase = portalBaseFromEnv(env);
+  const rawPhone = voicePhoneFromEnv(env);
+  const displayPhone = formatDisplayPhone(rawPhone);
+  const headerHtml = `<header class="topbar"><div class="wrap topbar-inner">
+    <a class="brand" href="${escHtml(portalBase + '/')}">
+      <img src="${escHtml(requestUrl.origin)}/media/ucg-logo-light.png" alt="Universidad Casa Grande">
+      <span>Posgrados · Guías de Admisión</span>
+    </a>
+    <nav class="nav-links" aria-label="Navegación principal">
+      <a href="${escHtml(portalBase + '/')}">Portal de Maestrías</a>
+      <a href="${escHtml(requestUrl.origin)}/guias">Todas las guías</a>
+      <a class="phone-pill" href="tel:${escHtml(rawPhone)}">Oficial IA: ${escHtml(displayPhone)}</a>
+    </nav>
+  </div></header>`;
+  const footerHtml = `<footer class="footer"><div class="wrap footer-inner">
+    <div><strong>Universidad Casa Grande · Posgrados</strong> · Guayaquil, Ecuador · Admisiones ${escHtml(brand.admissionsPhone)}</div>
+    <div><a href="${escHtml(portalBase + '/')}">Explorar 34 maestrías</a> · <a href="${escHtml(requestUrl.origin)}/guias">Índice de guías</a></div>
+  </div></footer>`;
+  return { portalBase, rawPhone, displayPhone, headerHtml, footerHtml };
+}
+
+function voicePhoneFromEnv(env) {
+  return env.RETELL_INBOUND_NUMBER || '+19124915544';
+}
+
+function notFoundGuideResponse(env, requestUrl) {
+  const { portalBase, headerHtml, footerHtml } = renderSeoChrome(env, requestUrl);
+  const html = seoPageShell({
+    title: 'Guía no disponible | Posgrados Universidad Casa Grande',
+    headTags: '<meta name="robots" content="noindex, nofollow">',
+    headerHtml,
+    mainHtml: `<section style="padding:3rem 0"><div class="article-card" style="max-width:44rem;margin:0 auto">
+      <span class="kicker">Contenido no disponible</span>
+      <h1>No encontramos esa guía publicada</h1>
+      <p class="lead">Es posible que la guía aún esté en borrador o haya cambiado de dirección.</p>
+      <p><a href="${escHtml(requestUrl.origin)}/guias">Ver todas las guías publicadas</a> · <a href="${escHtml(portalBase + '/')}">Ir al portal de Posgrados UCG</a></p>
+    </div></section>`,
+    footerHtml
+  });
+  return new Response(html, {
+    status: 404,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
+  });
+}
+
+async function handlePublicGuidePage(env, requestUrl, rawSlug) {
+  let slug;
+  try {
+    slug = decodeURIComponent(rawSlug);
+  } catch {
+    return notFoundGuideResponse(env, requestUrl);
+  }
+  let article = null;
+  let related = [];
+  if (env.DB) {
+    try {
+      article = await env.DB.prepare("SELECT * FROM seo_articles WHERE slug = ? AND status = 'published'").bind(slug).first();
+      if (article) {
+        const relRes = await env.DB.prepare(
+          "SELECT slug, program, title, summary, published_at FROM seo_articles WHERE status = 'published' AND slug <> ? ORDER BY (program = ?) DESC, published_at DESC LIMIT 3"
+        ).bind(slug, article.program || '').all();
+        related = relRes.results || [];
+      }
+    } catch (err) {
+      if (!/no such table/i.test(String(err?.message))) throw err;
+    }
+  }
+  if (!article) return notFoundGuideResponse(env, requestUrl);
+
+  const program = programs.find(p => p.slug === article.program) || null;
+  const { portalBase, rawPhone, displayPhone, headerHtml, footerHtml } = renderSeoChrome(env, requestUrl);
+  const checklist = buildSeoChecklist(article, program);
+  const canonicalUrl = publicGuideUrl(requestUrl, article.slug);
+  const metaDesc = trimMetaDesc(article.summary || program?.summary || article.title, 160);
+  const keywordsMeta = [article.source_query, program?.title, 'maestría Ecuador', 'Universidad Casa Grande', 'posgrados Ecuador']
+    .filter(Boolean).join(', ');
+  const imageUrl = `${requestUrl.origin}${program?.image || '/media/campus-hero.webp'}`;
+  const publishedIso = article.published_at || article.created_at || new Date().toISOString();
+  const modifiedIso = article.updated_at || publishedIso;
+  const { html: bodyHtml, toc } = renderMarkdownAndToc(article.body);
+
+  const graph = [
+    {
+      '@type': 'Article',
+      '@id': `${canonicalUrl}#article`,
+      headline: article.title,
+      description: metaDesc,
+      inLanguage: 'es-EC',
+      datePublished: publishedIso,
+      dateModified: modifiedIso,
+      mainEntityOfPage: canonicalUrl,
+      image: imageUrl,
+      keywords: keywordsMeta,
+      publisher: {
+        '@type': 'CollegeOrUniversity',
+        name: 'Universidad Casa Grande',
+        url: brand.url
+      },
+      citation: article.source_url || program?.url || brand.catalogUrl
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Posgrados', item: `${portalBase}/` },
+        { '@type': 'ListItem', position: 2, name: 'Guías', item: `${requestUrl.origin}/guias` },
+        { '@type': 'ListItem', position: 3, name: article.title, item: canonicalUrl }
+      ]
+    }
+  ];
+  if (program) {
+    graph.push({
+      '@type': 'Course',
+      name: program.title,
+      description: program.summary,
+      provider: {
+        '@type': 'CollegeOrUniversity',
+        name: 'Universidad Casa Grande',
+        url: brand.url
+      },
+      sameAs: program.url,
+      ...(program.degree ? { educationalCredentialAwarded: program.degree } : {}),
+      ...(program.duration ? { timeRequired: program.duration } : {}),
+      hasCourseInstance: {
+        '@type': 'CourseInstance',
+        courseMode: program.mode || 'En línea'
+      }
+    });
+  }
+
+  const headTags = [
+    '<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">',
+    `<meta name="description" content="${escHtml(metaDesc)}">`,
+    `<meta name="keywords" content="${escHtml(keywordsMeta)}">`,
+    `<link rel="canonical" href="${escHtml(canonicalUrl)}">`,
+    '<meta property="og:type" content="article">',
+    '<meta property="og:locale" content="es_EC">',
+    '<meta property="og:site_name" content="Posgrados · Universidad Casa Grande">',
+    `<meta property="og:title" content="${escHtml(article.title)}">`,
+    `<meta property="og:description" content="${escHtml(metaDesc)}">`,
+    `<meta property="og:url" content="${escHtml(canonicalUrl)}">`,
+    `<meta property="og:image" content="${escHtml(imageUrl)}">`,
+    `<meta property="article:published_time" content="${escHtml(publishedIso)}">`,
+    `<meta property="article:modified_time" content="${escHtml(modifiedIso)}">`,
+    `<meta property="article:section" content="${escHtml(program?.area || 'Posgrados')}">`,
+    '<meta name="twitter:card" content="summary_large_image">',
+    `<meta name="twitter:title" content="${escHtml(article.title)}">`,
+    `<meta name="twitter:description" content="${escHtml(metaDesc)}">`,
+    `<meta name="twitter:image" content="${escHtml(imageUrl)}">`,
+    `<script type="application/ld+json">${safeJsonLd({ '@context': 'https://schema.org', '@graph': graph })}</script>`
+  ].join('\n');
+
+  const tocHtml = toc.length
+    ? `<nav class="toc" aria-label="Tabla de contenido"><p class="toc-title">Contenido de esta guía</p><ul>${toc.map(item => `<li><a href="#${escHtml(item.id)}">${escHtml(item.text)}</a></li>`).join('')}</ul></nav>`
+    : '';
+
+  const tuitionDisplay = program && Number.isFinite(program.price) && program.price > 0
+    ? `${new Intl.NumberFormat('es-EC', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(program.price)} USD`
+    : 'Consultar con Admisiones';
+
+  const programBox = program ? `<aside class="side-box" aria-label="Ficha verificada del programa">
+    <h2>Ficha verificada UCG</h2>
+    <dl class="facts">
+      <div><dt>Programa</dt><dd>${escHtml(program.title)}</dd></div>
+      <div><dt>Modalidad</dt><dd>${escHtml(program.mode || 'Confirmar con Admisiones')}</dd></div>
+      <div><dt>Duración publicada</dt><dd>${escHtml(program.duration || 'Confirmar con Admisiones')}</dd></div>
+      <div><dt>Inversión publicada</dt><dd>${escHtml(tuitionDisplay)}</dd></div>
+      <div><dt>Estado</dt><dd>${escHtml(program.admissionsStatus || 'Consultar convocatoria')}</dd></div>
+    </dl>
+    <p style="margin:1rem 0 0;font-size:.9rem">
+      <a href="${escHtml(program.url)}" target="_blank" rel="noopener noreferrer">Ficha oficial en casagrande.edu.ec ↗</a>
+      ${program.brochure ? `<br><a href="${escHtml(program.brochure)}" target="_blank" rel="noopener noreferrer">Descargar folleto PDF ↗</a>` : ''}
+    </p>
+  </aside>` : '';
+
+  const relatedHtml = related.length ? `<section style="margin-top:2.2rem">
+    <h2 style="font-size:1.35rem;margin-bottom:.75rem">Más guías de Posgrados UCG</h2>
+    <div class="related-grid">${related.map(r => `<article class="guide-card">
+      <div><h3><a href="${escHtml(publicGuideUrl(requestUrl, r.slug))}">${escHtml(r.title)}</a></h3><p>${escHtml(trimMetaDesc(r.summary, 130))}</p></div>
+      <a href="${escHtml(publicGuideUrl(requestUrl, r.slug))}">Leer guía →</a>
+    </article>`).join('')}</div>
+  </section>` : '';
+
+  const mainHtml = `
+    <nav class="breadcrumbs" aria-label="Ruta de navegación">
+      <ol>
+        <li><a href="${escHtml(portalBase + '/')}">Posgrados</a></li>
+        <li><a href="${escHtml(requestUrl.origin)}/guias">Guías</a></li>
+        <li aria-current="page">${escHtml(article.title)}</li>
+      </ol>
+    </nav>
+    <div class="layout">
+      <div>
+        <article class="article-card">
+          <span class="kicker">${escHtml(program?.area || 'Posgrados UCG')}${article.source_query ? ` · ${escHtml(article.source_query)}` : ''}</span>
+          <h1>${escHtml(article.title)}</h1>
+          <p class="lead">${escHtml(article.summary)}</p>
+          <div class="meta-bar">
+            <span>Universidad Casa Grande · Guayaquil</span>
+            <time datetime="${escHtml(publishedIso)}">Publicado: ${escHtml(formatEcDate(publishedIso))}</time>
+            <span>~${checklist.readingMinutes} min de lectura</span>
+          </div>
+          <figure class="hero-media">
+            <img src="${escHtml(imageUrl)}" alt="${escHtml(program?.title || article.title)}">
+          </figure>
+          ${tocHtml}
+          <div class="prose">${bodyHtml}</div>
+        </article>
+        ${relatedHtml}
+      </div>
+      <aside class="sidebar">
+        <div class="cta-box">
+          <h2>Habla con nuestra Oficial de Admisiones IA</h2>
+          <p>Resuelve dudas sobre mallas, modalidades y recibe un resumen completo por correo tras tu llamada.</p>
+          <a class="btn btn-primary" href="tel:${escHtml(rawPhone)}">Llamar al ${escHtml(displayPhone)}</a>
+          <a class="btn btn-ghost" href="${escHtml(portalBase + '/#solicitar')}">Solicitar información en línea</a>
+        </div>
+        ${programBox}
+      </aside>
+    </div>`;
+
+  const html = seoPageShell({
+    title: `${article.title} | Posgrados Universidad Casa Grande`,
+    headTags,
+    headerHtml,
+    mainHtml,
+    footerHtml
+  });
+  return new Response(html, {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff' }
+  });
+}
+
+async function handlePublicGuidesIndex(env, requestUrl) {
+  let guides = [];
+  if (env.DB) {
+    try {
+      const res = await env.DB.prepare(
+        "SELECT slug, program, title, summary, source_query, published_at, updated_at FROM seo_articles WHERE status = 'published' ORDER BY published_at DESC, updated_at DESC, slug ASC"
+      ).all();
+      guides = res.results || [];
+    } catch (err) {
+      if (!/no such table/i.test(String(err?.message))) throw err;
+    }
+  }
+  const { portalBase, rawPhone, displayPhone, headerHtml, footerHtml } = renderSeoChrome(env, requestUrl);
+  const canonicalUrl = `${requestUrl.origin}/guias`;
+  const desc = 'Guías académicas verificadas sobre maestrías, modalidades, requisitos e inversión en Posgrados de la Universidad Casa Grande (Guayaquil, Ecuador).';
+  const graph = [
+    {
+      '@type': 'CollectionPage',
+      '@id': `${canonicalUrl}#collection`,
+      name: 'Guías de Posgrados · Universidad Casa Grande',
+      description: desc,
+      url: canonicalUrl,
+      inLanguage: 'es-EC',
+      publisher: { '@type': 'CollegeOrUniversity', name: 'Universidad Casa Grande', url: brand.url }
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Posgrados', item: `${portalBase}/` },
+        { '@type': 'ListItem', position: 2, name: 'Guías', item: canonicalUrl }
+      ]
+    }
+  ];
+  const headTags = [
+    '<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">',
+    `<meta name="description" content="${escHtml(desc)}">`,
+    `<link rel="canonical" href="${escHtml(canonicalUrl)}">`,
+    '<meta property="og:type" content="website">',
+    '<meta property="og:locale" content="es_EC">',
+    '<meta property="og:title" content="Guías de Posgrados · Universidad Casa Grande">',
+    `<meta property="og:description" content="${escHtml(desc)}">`,
+    `<meta property="og:url" content="${escHtml(canonicalUrl)}">`,
+    `<script type="application/ld+json">${safeJsonLd({ '@context': 'https://schema.org', '@graph': graph })}</script>`
+  ].join('\n');
+
+  const cardsHtml = guides.length
+    ? `<div class="related-grid">${guides.map(g => {
+        const prog = programs.find(p => p.slug === g.program);
+        return `<article class="guide-card">
+          <div>
+            <span class="kicker">${escHtml(prog?.area || 'Posgrados UCG')}</span>
+            <h3><a href="${escHtml(publicGuideUrl(requestUrl, g.slug))}">${escHtml(g.title)}</a></h3>
+            <p>${escHtml(trimMetaDesc(g.summary, 150))}</p>
+          </div>
+          <a href="${escHtml(publicGuideUrl(requestUrl, g.slug))}">Leer guía completa →</a>
+        </article>`;
+      }).join('')}</div>`
+    : `<div class="article-card"><p>Aún no hay guías publicadas. Explora nuestras <a href="${escHtml(portalBase + '/#catalogo')}">34 maestrías en el portal</a> o llama a nuestra Oficial IA al <a href="tel:${escHtml(rawPhone)}">${escHtml(displayPhone)}</a>.</p></div>`;
+
+  const mainHtml = `<section style="padding:1.5rem 0 3.5rem">
+    <nav class="breadcrumbs" aria-label="Ruta de navegación">
+      <ol>
+        <li><a href="${escHtml(portalBase + '/')}">Posgrados</a></li>
+        <li aria-current="page">Guías</li>
+      </ol>
+    </nav>
+    <span class="kicker">Universidad Casa Grande · Ecuador</span>
+    <h1>Guías de orientación para posgrados</h1>
+    <p class="lead">${escHtml(desc)}</p>
+    ${cardsHtml}
+  </section>`;
+
+  const html = seoPageShell({
+    title: 'Guías de Posgrados | Universidad Casa Grande',
+    headTags,
+    headerHtml,
+    mainHtml,
+    footerHtml
+  });
+  return new Response(html, {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff' }
+  });
+}
+
+async function handlePublicSitemap(env, requestUrl) {
+  let guides = [];
+  if (env.DB) {
+    try {
+      const res = await env.DB.prepare(
+        "SELECT slug, published_at, updated_at FROM seo_articles WHERE status = 'published' ORDER BY published_at DESC, slug ASC"
+      ).all();
+      guides = res.results || [];
+    } catch (err) {
+      if (!/no such table/i.test(String(err?.message))) throw err;
+    }
+  }
+  const urls = [
+    `<url><loc>${escHtml(requestUrl.origin + '/guias')}</loc></url>`,
+    ...guides.map(g => {
+      const lastmod = String(g.updated_at || g.published_at || '').slice(0, 10);
+      return `<url><loc>${escHtml(publicGuideUrl(requestUrl, g.slug))}</loc>${lastmod ? `<lastmod>${escHtml(lastmod)}</lastmod>` : ''}</url>`;
+    })
+  ];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>`;
+  return new Response(xml, {
+    status: 200,
+    headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff' }
+  });
+}
+
+function handlePublicRobots(requestUrl) {
+  const txt = `User-agent: *\nAllow: /guias\nDisallow: /api/\nSitemap: ${requestUrl.origin}/sitemap.xml\n`;
+  return new Response(txt, {
+    status: 200,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff' }
+  });
 }
 
 async function handleCatalogLookup(request) {
@@ -1294,6 +1920,27 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
       return crmJson({ error: 'Origen no permitido.' }, 403);
     }
     response = await routePublicAdmin(request, env, url, path);
+  } else if (path === '/robots.txt' && ['GET', 'HEAD'].includes(request.method)) {
+    response = handlePublicRobots(url);
+    if (request.method === 'HEAD') {
+      response = new Response(null, { status: response.status, headers: response.headers });
+    }
+  } else if (path === '/sitemap.xml' && ['GET', 'HEAD'].includes(request.method)) {
+    response = await handlePublicSitemap(env, url);
+    if (request.method === 'HEAD') {
+      response = new Response(null, { status: response.status, headers: response.headers });
+    }
+  } else if (path === '/guias' && ['GET', 'HEAD'].includes(request.method)) {
+    response = await handlePublicGuidesIndex(env, url);
+    if (request.method === 'HEAD') {
+      response = new Response(null, { status: response.status, headers: response.headers });
+    }
+  } else if (path.startsWith('/guias/') && ['GET', 'HEAD'].includes(request.method)) {
+    const slugMatch = path.match(/^\/guias\/([^/]+)$/);
+    response = slugMatch ? await handlePublicGuidePage(env, url, slugMatch[1]) : notFoundGuideResponse(env, url);
+    if (request.method === 'HEAD') {
+      response = new Response(null, { status: response.status, headers: response.headers });
+    }
   } else if (path === '/api/retell/catalog-lookup' && request.method === 'POST') {
     response = await handleCatalogLookup(request);
   } else {

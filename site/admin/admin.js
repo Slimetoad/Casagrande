@@ -176,11 +176,24 @@
     // SEO Analysis elements
     seoSyncStatus: document.getElementById('seo-sync-status'),
     seoRefreshBtn: document.getElementById('seo-refresh-btn'),
-    seoKpiPages: document.getElementById('seo-kpi-pages'),
     seoKpiVolume: document.getElementById('seo-kpi-volume'),
+    seoKpiVolumeSub: document.getElementById('seo-kpi-volume-sub'),
+    seoKpiTrafficValue: document.getElementById('seo-kpi-traffic-value'),
+    seoKpiQuickwins: document.getElementById('seo-kpi-quickwins'),
+    seoKpiQuickwinsSub: document.getElementById('seo-kpi-quickwins-sub'),
     seoKpiCpc: document.getElementById('seo-kpi-cpc'),
-    seoKpiWithVol: document.getElementById('seo-kpi-with-vol'),
-    seoKpiGuides: document.getElementById('seo-kpi-guides'),
+    seoKpiCpcSub: document.getElementById('seo-kpi-cpc-sub'),
+    seoKpiCoverage: document.getElementById('seo-kpi-coverage'),
+    seoCoverageBar: document.getElementById('seo-coverage-bar'),
+    seoKpiCoverageSub: document.getElementById('seo-kpi-coverage-sub'),
+    seoChartMatrixWrap: document.getElementById('seo-chart-matrix-wrap'),
+    seoChartMatrix: document.getElementById('seo-chart-matrix'),
+    seoMatrixTooltip: document.getElementById('seo-matrix-tooltip'),
+    seoMatrixSelectedBar: document.getElementById('seo-matrix-selected-bar'),
+    seoChartAreas: document.getElementById('seo-chart-areas'),
+    seoChartDonuts: document.getElementById('seo-chart-donuts'),
+    seoTopKeywords: document.getElementById('seo-top-keywords'),
+    seoPlaybook: document.getElementById('seo-playbook'),
     seoError: document.getElementById('seo-error'),
     seoSearch: document.getElementById('seo-search'),
     seoAreaFilter: document.getElementById('seo-area-filter'),
@@ -222,6 +235,11 @@
     studioMetaStatus: document.getElementById('studio-meta-status'),
     studioSaveDraftBtn: document.getElementById('studio-save-draft-btn'),
     studioPublishBtn: document.getElementById('studio-publish-btn'),
+    cePublishedBanner: document.getElementById('ce-published-banner'),
+    cePublishedOpen: document.getElementById('ce-published-open'),
+    cePublishedUrl: document.getElementById('ce-published-url'),
+    ceCopyUrlBtn: document.getElementById('ce-copy-url-btn'),
+    ceSeoChips: document.getElementById('ce-seo-chips'),
 
     toastContainer: document.getElementById('toast-container')
   };
@@ -389,13 +407,43 @@
     state.programBySlug = new Map(list.map((p) => [p.slug, p]));
   }
 
-  function showToast(message, type = 'ok') {
+  function safeExternalUrl(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return '';
+    try {
+      const parsed = new URL(raw.trim(), window.location.href);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function resolvePublishedUrl(slug, explicitUrl = '') {
+    const cleanExplicit = safeExternalUrl(explicitUrl);
+    if (cleanExplicit) return cleanExplicit;
+    if (!slug) return '';
+    return `${state.apiBase}/guias/${encodeURIComponent(slug)}`;
+  }
+
+  function showToast(message, type = 'ok', link = null) {
     if (!els.toastContainer) return;
     const toast = document.createElement('div');
     toast.className = `toast ${type === 'err' ? 'is-err' : 'is-ok'}`;
-    toast.textContent = message;
+    const span = document.createElement('span');
+    span.textContent = message;
+    toast.appendChild(span);
+
+    const validHref = link?.href ? safeExternalUrl(link.href) : '';
+    if (validHref) {
+      const a = document.createElement('a');
+      a.href = validHref;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = link.label || 'Abrir enlace ↗';
+      toast.appendChild(a);
+    }
+
     els.toastContainer.appendChild(toast);
-    window.setTimeout(() => toast.remove(), 3800);
+    window.setTimeout(() => toast.remove(), link ? 6500 : 3800);
   }
 
   async function apiRequest(path, options = {}) {
@@ -1110,6 +1158,10 @@
         stats: data.stats || {}
       };
       renderCrmAllViews();
+      if (state.seoLoaded && state.seoData) {
+        state.seoRows = buildMergedSeoRows(state.seoData);
+        renderSeoSection();
+      }
       if (els.crmSyncStatus) {
         els.crmSyncStatus.textContent = `Actualizado: ${formatDateEc(new Date().toISOString())}`;
       }
@@ -1206,25 +1258,63 @@
   }
 
   // ==================== SECTION 2: SEO ANALYSIS ====================
+  function computeOpportunityScore(row) {
+    let pts = 0;
+    const vol = typeof row.volume === 'number' && row.volume > 0 ? row.volume : 0;
+    const cpc = typeof row.cpc === 'number' && row.cpc > 0 ? row.cpc : 0;
+    if (vol > 0) pts += Math.min(45, Math.round((Math.log1p(vol) / Math.log1p(750)) * 45));
+    if (cpc > 0) pts += Math.min(25, Math.round((Math.min(cpc, 13) / 13) * 25));
+    if (row.difficulty === 0 && vol > 0) pts += 15;
+    else if (typeof row.difficulty === 'number' && row.difficulty <= 25 && vol > 0) pts += 8;
+    if (row.editorialStatus !== 'published') pts += 15;
+    else pts += 5;
+    return Math.min(100, pts);
+  }
+
   function buildMergedSeoRows(data) {
     const rows = Array.isArray(data?.rows) ? data.rows : [];
     const marketList = Array.isArray(data?.marketResearch) ? data.marketResearch : [];
     const marketByProgram = new Map(marketList.map((m) => [m.program, m]));
     const publishedGuidePrograms = new Set(rows.filter((r) => r.kind === 'guia').map((r) => r.program));
 
+    const contentPlan = Array.isArray(state.contentData?.plan) ? state.contentData.plan : [];
+    const contentArticles = Array.isArray(state.contentData?.articles) ? state.contentData.articles : [];
+    const planByProgram = new Map(contentPlan.map((p) => [p.program, p]));
+    const articleByProgram = new Map(contentArticles.map((a) => [a.program, a]));
+
+    const crmLeadsByProgram = new Map();
+    for (const l of state.crm.leads || []) {
+      if (!l.program) continue;
+      crmLeadsByProgram.set(l.program, (crmLeadsByProgram.get(l.program) || 0) + 1);
+    }
+
     return rows.map((row) => {
       const prog = state.programBySlug.get(row.program) || null;
       const market = marketByProgram.get(row.program) || null;
       const metrics = row.metrics || {};
+      const planItem = planByProgram.get(row.program) || null;
+      const artItem = articleByProgram.get(row.program) || null;
 
       const volume = metrics.searchVolume ?? market?.volume ?? null;
       const cpc = metrics.cpc ?? market?.cpc ?? null;
       const competition = metrics.competition ?? market?.competition ?? null;
       const difficulty = metrics.keywordDifficulty ?? market?.difficulty ?? null;
       const keyword = row.keyword || market?.keyword || '';
-      const intent = market?.intent || '';
+      const intent = market?.intent || planItem?.intent || '';
 
-      return {
+      const isPublished = row.kind === 'guia' ||
+        publishedGuidePrograms.has(row.program) ||
+        artItem?.status === 'published' ||
+        planItem?.status === 'published';
+      const isDraft = !isPublished && (artItem?.status === 'draft' || planItem?.status === 'draft');
+      const editorialStatus = isPublished ? 'published' : isDraft ? 'draft' : 'planned';
+      const articleSlug = artItem?.slug || planItem?.articleSlug || (row.kind === 'guia' ? row.id.replace(/^guia:/, '') : `guia-${row.program}`);
+      const publishedUrl = isPublished ? resolvePublishedUrl(articleSlug, artItem?.publishedUrl || planItem?.publishedUrl) : '';
+      const trafficValue = (typeof volume === 'number' && volume > 0 && typeof cpc === 'number' && cpc > 0)
+        ? Math.round(volume * cpc * 100) / 100
+        : 0;
+
+      const enriched = {
         ...row,
         area: prog?.area || '',
         shortTitle: prog?.shortTitle || row.title,
@@ -1234,11 +1324,18 @@
         cpc,
         competition,
         difficulty,
-        hasGuide: row.kind === 'guia' || publishedGuidePrograms.has(row.program),
+        trafficValue,
+        editorialStatus,
+        hasGuide: isPublished,
+        articleSlug,
+        publishedUrl,
+        crmLeads: crmLeadsByProgram.get(row.program) || 0,
         views: metrics.views,
         ctaClicks: metrics.ctaClicks,
         leads: metrics.leads
       };
+      enriched.opportunityScore = computeOpportunityScore(enriched);
+      return enriched;
     });
   }
 
@@ -1249,38 +1346,499 @@
     return state.seoRows.filter((row) => {
       if (area && row.area !== area) return false;
       if (opportunity === 'volume' && !(typeof row.volume === 'number' && row.volume > 0)) return false;
+      if (opportunity === 'quickwin' && !(row.difficulty === 0 && typeof row.volume === 'number' && row.volume > 0)) return false;
       if (opportunity === 'no_guide' && row.hasGuide) return false;
       if (opportunity === 'high_cpc' && !(typeof row.cpc === 'number' && row.cpc >= 4)) return false;
-      if (opportunity === 'portal_activity' && !((row.views || 0) > 0 || (row.leads || 0) > 0)) return false;
+      if (opportunity === 'portal_activity' && !((row.views || 0) > 0 || (row.leads || 0) > 0 || row.crmLeads > 0)) return false;
       if (!q) return true;
       const haystack = normalizeText([row.title, row.shortTitle, row.program, row.keyword, row.area].join(' '));
       return haystack.includes(q);
     });
   }
 
+  function renderSeoMatrixChart(progRows) {
+    if (!els.seoChartMatrix) return;
+    const points = progRows.filter((r) => (typeof r.volume === 'number' && r.volume > 0) || (typeof r.cpc === 'number' && r.cpc > 0));
+    if (!points.length) {
+      els.seoChartMatrix.innerHTML = '<div class="kanban-empty">Sin datos de volumen o CPC para graficar.</div>';
+      return;
+    }
+
+    const W = 680;
+    const H = 360;
+    const pad = { top: 28, right: 26, bottom: 44, left: 56 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+
+    const maxCpc = Math.max(13.5, ...points.map((p) => (typeof p.cpc === 'number' ? p.cpc + 0.8 : 0)));
+    const maxVol = Math.max(760, ...points.map((p) => (typeof p.volume === 'number' ? Math.ceil((p.volume + 60) / 100) * 100 : 0)));
+    const maxVal = Math.max(100, ...points.map((p) => p.trafficValue || 0));
+
+    const xOf = (cpc) => pad.left + ((Math.max(0, cpc || 0)) / maxCpc) * plotW;
+    const yOf = (vol) => pad.top + plotH - ((Math.max(0, vol || 0)) / maxVol) * plotH;
+    const rOf = (val) => 7 + Math.sqrt(Math.max(0, val || 0) / maxVal) * 18;
+
+    const midX = xOf(5);
+    const midY = yOf(120);
+
+    const xTicks = [0, 3, 6, 9, 12];
+    const yTicks = [0, 150, 300, 500, 720];
+
+    const statusFill = (status) => status === 'published' ? '#10b981' : status === 'draft' ? '#6366f1' : '#FF8300';
+
+    const labelsToShow = new Set(
+      [...points].sort((a, b) => (b.volume || 0) + (b.cpc || 0) * 15 - ((a.volume || 0) + (a.cpc || 0) * 15))
+        .slice(0, 7)
+        .map((p) => p.id)
+    );
+
+    const sortedPoints = [...points].sort((a, b) => (b.trafficValue || 0) - (a.trafficValue || 0));
+
+    els.seoChartMatrix.innerHTML = `
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Matriz Competitiva de Oportunidad SEO: Volumen vs CPC USD">
+        <defs>
+          <linearGradient id="matrixBg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#fbfcfe"/>
+            <stop offset="100%" stop-color="#f3f6fb"/>
+          </linearGradient>
+        </defs>
+        <rect x="${pad.left}" y="${pad.top}" width="${plotW}" height="${plotH}" rx="8" fill="url(#matrixBg)" stroke="#dfe4ec"/>
+
+        ${yTicks.map((t) => {
+          const y = yOf(t);
+          return `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="#e7ecf3" stroke-width="1"/>
+                  <text x="${pad.left - 8}" y="${y + 4}" text-anchor="end" font-size="10.5" fill="#526071">${t}</text>`;
+        }).join('')}
+
+        ${xTicks.map((t) => {
+          const x = xOf(t);
+          return `<line x1="${x}" y1="${pad.top}" x2="${x}" y2="${pad.top + plotH}" stroke="#e7ecf3" stroke-width="1"/>
+                  <text x="${x}" y="${pad.top + plotH + 17}" text-anchor="middle" font-size="10.5" fill="#526071">$${t}</text>`;
+        }).join('')}
+
+        <line x1="${midX}" y1="${pad.top}" x2="${midX}" y2="${pad.top + plotH}" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"/>
+        <line x1="${pad.left}" y1="${midY}" x2="${W - pad.right}" y2="${midY}" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"/>
+
+        <text x="${pad.left + 8}" y="${pad.top + 15}" font-size="10" font-weight="700" fill="#0e7c4c">Victorias Rápidas (Alto Vol · Bajo CPC)</text>
+        <text x="${W - pad.right - 8}" y="${pad.top + 15}" text-anchor="end" font-size="10" font-weight="700" fill="#b84e00">Joyas de Alto ROI (Alto Vol · Alto CPC)</text>
+        <text x="${W - pad.right - 8}" y="${pad.top + plotH - 8}" text-anchor="end" font-size="10" font-weight="600" fill="#64748b">Nicho Comercial (Alto CPC)</text>
+        <text x="${pad.left + 8}" y="${pad.top + plotH - 8}" font-size="10" font-weight="600" fill="#64748b">Exploración</text>
+
+        <text x="${pad.left + plotW / 2}" y="${H - 6}" text-anchor="middle" font-size="11" font-weight="700" fill="#141920">Costo por Clic Competitivo en Ecuador (CPC USD)</text>
+        <text x="15" y="${pad.top + plotH / 2}" text-anchor="middle" transform="rotate(-90 15 ${pad.top + plotH / 2})" font-size="11" font-weight="700" fill="#141920">Búsquedas Mensuales EC</text>
+
+        ${sortedPoints.map((p) => {
+          const cx = xOf(p.cpc);
+          const cy = yOf(p.volume);
+          const r = rOf(p.trafficValue);
+          const fill = statusFill(p.editorialStatus);
+          const selected = state.seoSelectedIds.has(p.id);
+          const shortLbl = p.shortTitle.replace(/^MBA\s*·\s*/i, 'MBA ').slice(0, 18);
+          return `
+            <g class="matrix-node">
+              <circle
+                class="matrix-bubble${selected ? ' is-selected' : ''}"
+                data-matrix-id="${escapeHtml(p.id)}"
+                cx="${cx.toFixed(1)}"
+                cy="${cy.toFixed(1)}"
+                r="${r.toFixed(1)}"
+                fill="${fill}"
+                fill-opacity="0.82"
+                stroke="${selected ? '#10151c' : '#ffffff'}"
+                stroke-width="${selected ? '2.5' : '1.5'}"
+                tabindex="0"
+                role="button"
+                aria-label="${escapeHtml(p.shortTitle)}: ${p.volume || 0} búsquedas/mes, $${p.cpc || 0} CPC"
+              />
+              ${labelsToShow.has(p.id)
+                ? `<text x="${(cx + r + 4).toFixed(1)}" y="${(cy + 3).toFixed(1)}" font-size="10" font-weight="700" fill="#141920" pointer-events="none">${escapeHtml(shortLbl)}</text>`
+                : ''}
+            </g>
+          `;
+        }).join('')}
+      </svg>
+    `;
+
+    const selectedMatrixPoints = points.filter((p) => state.seoSelectedIds.has(p.id));
+    if (els.seoMatrixSelectedBar) {
+      if (selectedMatrixPoints.length === 1) {
+        const sp = selectedMatrixPoints[0];
+        els.seoMatrixSelectedBar.hidden = false;
+        els.seoMatrixSelectedBar.innerHTML = `
+          <div>
+            <strong>${escapeHtml(sp.shortTitle)}</strong> · ${formatInt(sp.volume || 0)}/mes · ${sp.cpc ? formatUsd(sp.cpc) : '—'} CPC · Valor est. ${formatUsd(sp.trafficValue)}/mes
+          </div>
+          <div style="display:flex;gap:0.45rem;">
+            ${sp.hasGuide && sp.publishedUrl
+              ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(sp.publishedUrl)}" target="_blank" rel="noopener noreferrer">Ver guía ↗</a>`
+              : `<button type="button" class="btn btn-primary btn-sm" data-seo-to-content="${escapeHtml(sp.program)}">Crear guía →</button>`}
+          </div>
+        `;
+      } else {
+        els.seoMatrixSelectedBar.hidden = true;
+      }
+    }
+  }
+
+  function renderSeoAreasChart(progRows) {
+    if (!els.seoChartAreas) return;
+    const areaMap = new Map();
+    for (const r of progRows) {
+      const area = r.area || 'Otras';
+      if (!areaMap.has(area)) {
+        areaMap.set(area, { area, volume: 0, value: 0, total: 0, published: 0 });
+      }
+      const entry = areaMap.get(area);
+      entry.total += 1;
+      if (r.hasGuide) entry.published += 1;
+      if (typeof r.volume === 'number' && r.volume > 0) entry.volume += r.volume;
+      entry.value += r.trafficValue || 0;
+    }
+
+    const areas = [...areaMap.values()].sort((a, b) => b.volume - a.volume || b.value - a.value);
+    const maxVol = Math.max(100, ...areas.map((a) => a.volume));
+    const W = 460;
+    const rowH = 42;
+    const H = areas.length * rowH + 14;
+    const barX = 116;
+    const barMaxW = 215;
+
+    els.seoChartAreas.innerHTML = `
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Demanda y valor publicitario por área académica">
+        ${areas.map((a, idx) => {
+          const y = idx * rowH + 8;
+          const bw = a.volume > 0 ? Math.max(8, (a.volume / maxVol) * barMaxW) : 3;
+          const covW = a.total > 0 ? (a.published / a.total) * bw : 0;
+          const isActive = state.seoFilters.area === a.area;
+          return `
+            <g class="area-bar-row" data-area-bar="${escapeHtml(a.area)}" role="button" tabindex="0" aria-label="Filtrar por área ${escapeHtml(a.area)}">
+              <rect class="area-bar-bg" x="2" y="${y}" width="${W - 4}" height="34" rx="6" fill="${isActive ? '#fff3e4' : 'transparent'}" stroke="${isActive ? '#FF8300' : 'transparent'}"/>
+              <text x="10" y="${y + 21}" font-size="11.5" font-weight="700" fill="#141920">${escapeHtml(a.area)}</text>
+              <rect x="${barX}" y="${y + 10}" width="${barMaxW}" height="14" rx="7" fill="#edf1f6"/>
+              <rect x="${barX}" y="${y + 10}" width="${bw.toFixed(1)}" height="14" rx="7" fill="#FF8300"/>
+              ${covW > 0 ? `<rect x="${barX}" y="${y + 10}" width="${covW.toFixed(1)}" height="14" rx="7" fill="#10b981"/>` : ''}
+              <text x="${barX + barMaxW + 10}" y="${y + 16}" font-size="11" font-weight="700" fill="#141920">${formatInt(a.volume)}/mes</text>
+              <text x="${barX + barMaxW + 10}" y="${y + 29}" font-size="9.5" fill="#526071">${a.value > 0 ? `${formatUsd(a.value)}/m` : 'Sin CPC'} · ${a.published}/${a.total} guías</text>
+            </g>
+          `;
+        }).join('')}
+      </svg>
+    `;
+  }
+
+  function renderSvgDonut(segments, centerTop, centerBottom) {
+    const size = 122;
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = 44;
+    const circ = 2 * Math.PI * r;
+    const total = Math.max(1, segments.reduce((s, seg) => s + seg.value, 0));
+    let offset = 0;
+
+    return `
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e7ecf3" stroke-width="14"/>
+        ${segments.map((seg) => {
+          if (!seg.value) return '';
+          const len = (seg.value / total) * circ;
+          const el = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="14" stroke-dasharray="${len.toFixed(2)} ${(circ - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+          offset += len;
+          return el;
+        }).join('')}
+        <text x="${cx}" y="${cy - 1}" text-anchor="middle" font-size="15" font-weight="700" fill="#141920">${escapeHtml(centerTop)}</text>
+        <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="9.5" fill="#526071">${escapeHtml(centerBottom)}</text>
+      </svg>
+    `;
+  }
+
+  function renderSeoDonutsChart(progRows) {
+    if (!els.seoChartDonuts) return;
+    const pub = progRows.filter((r) => r.editorialStatus === 'published').length;
+    const draft = progRows.filter((r) => r.editorialStatus === 'draft').length;
+    const gap = Math.max(0, progRows.length - pub - draft);
+
+    const commercial = progRows.filter((r) => r.intent === 'commercial').length;
+    const informational = progRows.filter((r) => r.intent === 'informational').length;
+    const kdZero = progRows.filter((r) => r.difficulty === 0 && (r.volume || 0) > 0).length;
+    const withDiff = progRows.filter((r) => typeof r.difficulty === 'number' && r.difficulty > 0).length;
+    const unmeasured = Math.max(0, progRows.length - kdZero - withDiff);
+
+    const covSegs = [
+      { label: 'Publicadas', value: pub, color: '#10b981' },
+      { label: 'Borradores', value: draft, color: '#6366f1' },
+      { label: 'Sin guía', value: gap, color: '#FF8300' }
+    ];
+
+    const mixSegs = [
+      { label: 'KD 0 (Fácil)', value: kdZero, color: '#10b981' },
+      { label: 'Con KD > 0', value: withDiff, color: '#f59e0b' },
+      { label: 'Long-tail (sin vol.)', value: unmeasured, color: '#94a3b8' }
+    ];
+
+    els.seoChartDonuts.innerHTML = `
+      <div class="donut-block">
+        <h3>Cobertura de 34 Maestrías</h3>
+        ${renderSvgDonut(covSegs, `${pub}/${progRows.length || 34}`, 'publicadas')}
+        <div class="donut-legend">
+          ${covSegs.map((s) => `
+            <div class="donut-legend-row">
+              <span class="donut-legend-left"><i class="legend-dot" style="background:${s.color}"></i>${escapeHtml(s.label)}</span>
+              <strong>${s.value}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="donut-block">
+        <h3>Dificultad e Intención EC</h3>
+        ${renderSvgDonut(mixSegs, `${kdZero}`, 'KD = 0')}
+        <div class="donut-legend">
+          ${mixSegs.map((s) => `
+            <div class="donut-legend-row">
+              <span class="donut-legend-left"><i class="legend-dot" style="background:${s.color}"></i>${escapeHtml(s.label)}</span>
+              <strong>${s.value}</strong>
+            </div>
+          `).join('')}
+          <div class="donut-legend-row" style="border-top:1px solid #e7ecf3;padding-top:0.2rem;margin-top:0.15rem;">
+            <span class="table-sub">Intención</span>
+            <span>${informational} info · ${commercial} com.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSeoTopKeywords(progRows) {
+    if (!els.seoTopKeywords) return;
+    const top8 = [...progRows]
+      .filter((r) => typeof r.volume === 'number' && r.volume > 0)
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0) || (b.opportunityScore || 0) - (a.opportunityScore || 0))
+      .slice(0, 8);
+
+    if (!top8.length) {
+      els.seoTopKeywords.innerHTML = '<div class="kanban-empty">Sin palabras clave con volumen registrado.</div>';
+      return;
+    }
+
+    const maxVol = Math.max(1, top8[0].volume || 1);
+    els.seoTopKeywords.innerHTML = top8.map((r, i) => {
+      const pct = Math.max(6, Math.round(((r.volume || 0) / maxVol) * 100));
+      const compPct = typeof r.competition === 'number' ? Math.round(r.competition * 100) : 0;
+      return `
+        <div class="kw-rank-card">
+          <div class="kw-rank-top">
+            <div>
+              <span class="kw-rank-num">#${i + 1} · ${escapeHtml(r.area)}</span>
+              <div class="kw-rank-title">${escapeHtml(r.shortTitle)}</div>
+            </div>
+            ${r.difficulty === 0 ? '<span class="badge badge-ok">KD 0</span>' : ''}
+          </div>
+          <div class="kw-rank-term">${escapeHtml(r.keyword)}</div>
+          <div class="kw-bar-track"><div class="kw-bar-fill" style="width:${pct}%"></div></div>
+          <div class="kw-rank-foot">
+            <span><strong>${formatInt(r.volume)}</strong>/mes · ${r.cpc ? formatUsd(r.cpc) : '—'}</span>
+            <span class="comp-meter" title="Competencia publicitaria: ${compPct}%">
+              <span>${compPct}%</span>
+              <span class="comp-meter-bar"><span class="comp-meter-fill" style="width:${compPct}%"></span></span>
+            </span>
+            ${r.hasGuide && r.publishedUrl
+              ? `<a class="text-btn" href="${escapeHtml(r.publishedUrl)}" target="_blank" rel="noopener noreferrer">Ver página ↗</a>`
+              : `<button type="button" class="text-btn" data-seo-to-content="${escapeHtml(r.program)}">Crear guía →</button>`}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderSeoPlaybook(progRows) {
+    if (!els.seoPlaybook) return;
+    const quickWinGaps = progRows
+      .filter((r) => r.difficulty === 0 && (r.volume || 0) > 0 && !r.hasGuide)
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    const quickWinAll = quickWinGaps.length
+      ? quickWinGaps
+      : progRows.filter((r) => r.difficulty === 0 && (r.volume || 0) > 0).sort((a, b) => (b.volume || 0) - (a.volume || 0));
+
+    const highCpcRows = progRows
+      .filter((r) => typeof r.cpc === 'number' && r.cpc >= 4)
+      .sort((a, b) => (b.cpc || 0) - (a.cpc || 0));
+
+    const commercialRows = progRows
+      .filter((r) => r.intent === 'commercial')
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0) || (b.cpc || 0) - (a.cpc || 0));
+
+    const crmSynergyRows = progRows
+      .filter((r) => r.crmLeads > 0)
+      .sort((a, b) => b.crmLeads - a.crmLeads || (b.volume || 0) - (a.volume || 0));
+
+    const longTailRows = progRows
+      .filter((r) => !r.volume && !r.hasGuide);
+
+    const sumVal = (list) => list.reduce((s, r) => s + (r.trafficValue || 0), 0);
+    const cards = [];
+
+    if (quickWinAll.length) {
+      const topTarget = quickWinAll[0];
+      cards.push({
+        priority: 'Impacto Muy Alto',
+        priorityCls: 'badge-ok',
+        channel: 'SEO Orgánico',
+        title: 'Victorias Rápidas Orgánicas (KD 0 + Alta Demanda)',
+        valueLabel: `~$${formatInt(Math.round(sumVal(quickWinAll.slice(0, 5))))} USD/mes ahorro est.`,
+        steps: [
+          `Publicar guías pilar H2/H3 con esquema Article + Course en los ${quickWinAll.length} programas con dificultad KD 0.`,
+          'Incluir sección de preguntas frecuentes (malla, modalidad en línea y título de tercer nivel) para capturar fragmentos destacados.',
+          `Enlazar cada guía al formulario y a la Oficial de Admisiones IA (${formatVoicePhone(state.voicePhone)}).`
+        ],
+        programs: quickWinAll.slice(0, 4),
+        ctaProgram: topTarget.program,
+        ctaKeyword: topTarget.keyword,
+        analyzeIds: quickWinAll.slice(0, 8).map((r) => r.id),
+        analyzeQuestion: '¿Cómo priorizar la publicación de las maestrías con KD 0 y mayor volumen mensual en Ecuador?'
+      });
+    }
+
+    if (highCpcRows.length) {
+      const topCpc = highCpcRows.find((r) => !r.hasGuide) || highCpcRows[0];
+      cards.push({
+        priority: 'Impacto Muy Alto',
+        priorityCls: 'badge-retell',
+        channel: 'SEM / Ahorro CPC',
+        title: 'Defensa de CPC Alto (Reducir CAC vs. Google Ads)',
+        valueLabel: `CPC pico hasta ${formatUsd(highCpcRows[0].cpc)}/clic`,
+        steps: [
+          `Sustituir clics pagados de ${highCpcRows.slice(0, 3).map((r) => `${r.shortTitle} ($${r.cpc.toFixed(2)})`).join(', ')} con guías comparativas SEO.`,
+          'En pauta exacta (Search Ads), dirigir a una página con CTA telefónico inmediato hacia la Oficial IA para elevar la tasa de contacto.',
+          'Usar argumentos de valor UCG (flexibilidad, examen complexivo o titulación práctica) en el primer párrafo.'
+        ],
+        programs: highCpcRows.slice(0, 4),
+        ctaProgram: topCpc.program,
+        ctaKeyword: topCpc.keyword,
+        analyzeIds: highCpcRows.slice(0, 8).map((r) => r.id),
+        analyzeQuestion: '¿En qué maestrías de CPC alto en Ecuador conviene reemplazar pauta pagada con posicionamiento orgánico?'
+      });
+    }
+
+    if (commercialRows.length) {
+      const topCom = commercialRows[0];
+      cards.push({
+        priority: 'Impacto Alto',
+        priorityCls: 'badge-warn',
+        channel: 'Conversión Voz IA',
+        title: 'Captura de Intención Comercial (Listos para Postular)',
+        valueLabel: `~$${formatInt(Math.round(sumVal(commercialRows)))} USD/mes potencial`,
+        steps: [
+          'Destacar inversión transparente en USD ($2,800–$3,200 donde esté publicada) y tutorías en vivo desde el bloque superior.',
+          'Agregar llamado directo al simulador de inversión (#financiamiento) y llamada inmediata al +1 (912) 491-5544.',
+          'Activar seguimiento por correo vía Resend el mismo día para aspirantes que consultan modalidades flexibles.'
+        ],
+        programs: commercialRows.slice(0, 4),
+        ctaProgram: topCom.program,
+        ctaKeyword: topCom.keyword,
+        analyzeIds: commercialRows.map((r) => r.id),
+        analyzeQuestion: '¿Qué optimizaciones de conversión recomiendas para los programas con intención comercial?'
+      });
+    }
+
+    if (crmSynergyRows.length) {
+      const topCrm = crmSynergyRows[0];
+      cards.push({
+        priority: 'Impacto Alto',
+        priorityCls: 'badge-info',
+        channel: 'CRM + Contenido',
+        title: 'Sinergia CRM + Búsqueda Activa',
+        valueLabel: `${crmSynergyRows.reduce((s, r) => s + r.crmLeads, 0)} leads reales en CRM`,
+        steps: [
+          `Reforzar con guías de objeciones los programas con mayor tracción actual en CRM (${crmSynergyRows.slice(0, 2).map((r) => r.shortTitle).join(' y ')}).`,
+          'Enviar desde CRM -> Nutrición el enlace de la guía publicada junto al borrador personalizado de Claude.',
+          'Medir qué consultas de llamadas Retell se repiten para convertirlas en nuevas secciones H2.'
+        ],
+        programs: crmSynergyRows.slice(0, 4),
+        ctaProgram: topCrm.program,
+        ctaKeyword: topCrm.keyword,
+        analyzeIds: crmSynergyRows.slice(0, 8).map((r) => r.id),
+        analyzeQuestion: '¿Cómo alinear el contenido SEO con los programas que ya están generando leads en nuestro CRM?'
+      });
+    }
+
+    if (longTailRows.length) {
+      const topLt = longTailRows[0];
+      cards.push({
+        priority: 'Estratégico',
+        priorityCls: 'badge-neutral',
+        channel: 'Demanda Long-Tail',
+        title: 'Expansión Long-Tail para Nichos Especializados',
+        valueLabel: `${longTailRows.length} maestrías por posicionar`,
+        steps: [
+          'Capturar búsquedas específicas por problema profesional en Ecuador (ej. educación inclusiva, urbanismo, pedagogía).',
+          'Distribuir las guías en campañas segmentadas de LinkedIn y Meta dirigidas a docentes y directivos en Guayaquil y Quito.',
+          'Usar el enlace de la guía publicada como recurso de descarga/lectura previa a la llamada con Admisiones.'
+        ],
+        programs: longTailRows.slice(0, 4),
+        ctaProgram: topLt.program,
+        ctaKeyword: topLt.keyword || topLt.title,
+        analyzeIds: longTailRows.slice(0, 8).map((r) => r.id),
+        analyzeQuestion: '¿Qué enfoque editorial recomiendas para posicionar las maestrías especializadas sin volumen genérico medido?'
+      });
+    }
+
+    els.seoPlaybook.innerHTML = cards.map((card, idx) => `
+      <article class="playbook-card">
+        <div class="playbook-card-top">
+          <span class="badge ${card.priorityCls}">${escapeHtml(card.priority)}</span>
+          <span class="badge badge-web">${escapeHtml(card.channel)}</span>
+        </div>
+        <h3>${escapeHtml(card.title)}</h3>
+        <span class="playbook-value-pill">${escapeHtml(card.valueLabel)}</span>
+        <ol class="playbook-steps">
+          ${card.steps.map((st) => `<li>${escapeHtml(st)}</li>`).join('')}
+        </ol>
+        <div class="playbook-programs">
+          ${card.programs.map((p) => `<button type="button" class="chip-btn" data-playbook-draft="${escapeHtml(p.program)}" data-playbook-kw="${escapeHtml(p.keyword || '')}">${escapeHtml(p.shortTitle)}${p.volume ? ` (${p.volume})` : ''}</button>`).join('')}
+        </div>
+        <div class="playbook-actions">
+          <button type="button" class="btn btn-primary btn-sm" data-playbook-draft="${escapeHtml(card.ctaProgram)}" data-playbook-kw="${escapeHtml(card.ctaKeyword || '')}">✨ Generar guía →</button>
+          <button type="button" class="btn btn-ai btn-sm" data-playbook-ai="${idx}">Analizar con IA</button>
+        </div>
+      </article>
+    `).join('');
+
+    state.playbookCards = cards;
+  }
+
   function renderSeoSection() {
     if (!state.seoData) return;
     const rows = state.seoRows;
-    const summary = state.seoData.summary || {};
-
     const progRows = rows.filter((r) => r.kind === 'programa');
-    const guideRows = rows.filter((r) => r.kind === 'guia');
-    const withVolCount = summary.programsWithVolume > 0
-      ? summary.programsWithVolume
-      : progRows.filter((r) => typeof r.volume === 'number' && r.volume > 0).length;
-    const totalVol = summary.totalMonthlyVolume > 0
-      ? summary.totalMonthlyVolume
-      : progRows.reduce((s, r) => s + (typeof r.volume === 'number' ? r.volume : 0), 0);
-    const cpcList = progRows.map((r) => r.cpc).filter((v) => typeof v === 'number' && v > 0);
-    const avgCpc = summary.avgCpcUsd > 0
-      ? summary.avgCpcUsd
-      : (cpcList.length ? cpcList.reduce((a, b) => a + b, 0) / cpcList.length : 0);
 
-    if (els.seoKpiPages) els.seoKpiPages.textContent = String(summary.totalPages ?? rows.length);
+    const totalVol = progRows.reduce((s, r) => s + (typeof r.volume === 'number' ? r.volume : 0), 0);
+    const totalTrafficVal = progRows.reduce((s, r) => s + (r.trafficValue || 0), 0);
+    const withVolCount = progRows.filter((r) => typeof r.volume === 'number' && r.volume > 0).length;
+    const quickWins = progRows.filter((r) => r.difficulty === 0 && typeof r.volume === 'number' && r.volume > 0);
+    const quickWinVol = quickWins.reduce((s, r) => s + (r.volume || 0), 0);
+    const cpcList = progRows.map((r) => r.cpc).filter((v) => typeof v === 'number' && v > 0);
+    const avgCpc = cpcList.length ? cpcList.reduce((a, b) => a + b, 0) / cpcList.length : 0;
+    const maxCpc = cpcList.length ? Math.max(...cpcList) : 0;
+    const publishedCount = progRows.filter((r) => r.editorialStatus === 'published').length;
+    const draftCount = progRows.filter((r) => r.editorialStatus === 'draft').length;
+    const covPct = progRows.length ? Math.round((publishedCount / progRows.length) * 100) : 0;
+
     if (els.seoKpiVolume) els.seoKpiVolume.textContent = formatInt(totalVol);
+    if (els.seoKpiVolumeSub) els.seoKpiVolumeSub.textContent = `${withVolCount} de ${progRows.length} maestrías con demanda`;
+    if (els.seoKpiTrafficValue) els.seoKpiTrafficValue.textContent = totalTrafficVal > 0 ? `${formatUsd(totalTrafficVal)}/m` : '—';
+    if (els.seoKpiQuickwins) els.seoKpiQuickwins.textContent = `${quickWins.length} programas`;
+    if (els.seoKpiQuickwinsSub) els.seoKpiQuickwinsSub.textContent = `${formatInt(quickWinVol)} búsquedas/mes con KD 0`;
     if (els.seoKpiCpc) els.seoKpiCpc.textContent = avgCpc > 0 ? formatUsd(avgCpc) : '—';
-    if (els.seoKpiWithVol) els.seoKpiWithVol.textContent = String(withVolCount);
-    if (els.seoKpiGuides) els.seoKpiGuides.textContent = String(summary.publishedGuides ?? guideRows.length);
+    if (els.seoKpiCpcSub) els.seoKpiCpcSub.textContent = maxCpc > 0 ? `Pico máx: ${formatUsd(maxCpc)}` : 'Sin CPC medido';
+    if (els.seoKpiCoverage) els.seoKpiCoverage.textContent = `${publishedCount}/${progRows.length} (${covPct}%)`;
+    if (els.seoCoverageBar) els.seoCoverageBar.style.width = `${covPct}%`;
+    if (els.seoKpiCoverageSub) els.seoKpiCoverageSub.textContent = `${draftCount} borrador(es) en edición`;
+
+    renderSeoMatrixChart(progRows);
+    renderSeoAreasChart(progRows);
+    renderSeoDonutsChart(progRows);
+    renderSeoTopKeywords(progRows);
+    renderSeoPlaybook(progRows);
 
     const visible = getFilteredSeoRows();
     const selCount = state.seoSelectedIds.size;
@@ -1298,16 +1856,19 @@
 
     if (!els.seoTableBody) return;
     if (!visible.length) {
-      els.seoTableBody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:#526071;">No hay filas SEO que coincidan con el filtro.</td></tr>';
+      els.seoTableBody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:#526071;">No hay filas SEO que coincidan con el filtro.</td></tr>';
       return;
     }
 
+    const maxVolInTable = Math.max(1, ...visible.map((r) => r.volume || 0));
     els.seoTableBody.innerHTML = visible.map((row) => {
       const checked = state.seoSelectedIds.has(row.id);
       const compPct = typeof row.competition === 'number' ? `${Math.round(row.competition * 100)}%` : '—';
       const diffTxt = typeof row.difficulty === 'number' ? `KD ${row.difficulty}` : 'KD —';
       const viewsTxt = row.views !== null && row.views !== undefined ? formatInt(row.views) : '0';
-      const leadsTxt = row.leads !== null && row.leads !== undefined ? formatInt(row.leads) : '0';
+      const leadsTxt = formatInt((row.leads || 0) + (row.crmLeads || 0));
+      const volPct = row.volume ? Math.max(6, Math.round((row.volume / maxVolInTable) * 100)) : 0;
+      const oppCls = row.opportunityScore >= 70 ? 'opp-high' : row.opportunityScore >= 40 ? 'opp-med' : 'opp-low';
 
       return `
         <tr>
@@ -1323,22 +1884,26 @@
           </td>
           <td>
             <div>${escapeHtml(row.keyword || 'Sin término asignado')}</div>
-            ${row.source ? `<div class="table-sub">${escapeHtml(row.source)}</div>` : ''}
+            ${row.intent ? `<div class="table-sub">${escapeHtml(row.intent)}</div>` : ''}
           </td>
-          <td><strong>${row.volume !== null ? formatInt(row.volume) : '—'}</strong></td>
+          <td><span class="opp-pill ${oppCls}">${row.opportunityScore}/100</span></td>
+          <td>
+            <strong>${row.volume !== null ? formatInt(row.volume) : '—'}</strong>
+            ${volPct ? `<div class="vol-inline-bar"><div class="vol-inline-fill" style="width:${volPct}%"></div></div>` : ''}
+          </td>
           <td>${row.cpc !== null ? formatUsd(row.cpc) : '—'}</td>
+          <td><strong>${row.trafficValue > 0 ? formatUsd(row.trafficValue) : '—'}</strong></td>
           <td>
             <div>${escapeHtml(compPct)}</div>
             <div class="table-sub">${escapeHtml(diffTxt)}</div>
           </td>
-          <td>${row.intent ? `<span class="badge badge-neutral">${escapeHtml(row.intent)}</span>` : '—'}</td>
           <td>
             <div>${viewsTxt} vistas</div>
             <div class="table-sub">${leadsTxt} leads</div>
           </td>
           <td>
-            ${row.hasGuide
-              ? '<span class="badge badge-ok">Guía activa</span>'
+            ${row.hasGuide && row.publishedUrl
+              ? `<a class="text-btn" href="${escapeHtml(row.publishedUrl)}" target="_blank" rel="noopener noreferrer">Ver página ↗</a>`
               : `<button type="button" class="text-btn" data-seo-to-content="${escapeHtml(row.program)}">Crear guía →</button>`}
           </td>
         </tr>
@@ -1358,7 +1923,20 @@
     });
 
     try {
-      const data = await apiRequest(`/api/public/admin/seo?days=${days}`);
+      const [seoRes, contentRes] = await Promise.allSettled([
+        apiRequest(`/api/public/admin/seo?days=${days}`),
+        state.contentLoaded ? Promise.resolve(state.contentData) : apiRequest('/api/public/admin/content')
+      ]);
+
+      if (seoRes.status !== 'fulfilled') {
+        throw seoRes.reason;
+      }
+      if (contentRes.status === 'fulfilled' && contentRes.value) {
+        state.contentData = contentRes.value;
+        state.contentLoaded = true;
+      }
+
+      const data = seoRes.value;
       state.seoData = data;
       state.seoRows = buildMergedSeoRows(data);
       state.seoLoaded = true;
@@ -1437,6 +2015,10 @@
     return '<span class="badge badge-neutral">Planificado</span>';
   }
 
+  function formatInlinePreview(text) {
+    return escapeHtml(text).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  }
+
   function renderStudioPreview() {
     if (!els.studioPreviewPane) return;
     const title = els.studioTitle.value.trim() || 'Título de la guía';
@@ -1448,12 +2030,24 @@
 
     const bodyHtml = blocks.length
       ? blocks.map((block) => {
-        const lines = block.split('\n');
-        const first = lines[0].trim();
-        if (lines.length > 1 && first.length <= 100) {
-          return `<h4>${escapeHtml(first)}</h4><p>${escapeHtml(lines.slice(1).join(' '))}</p>`;
+        const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+        if (!lines.length) return '';
+        if (lines.length === 1 && /^##\s+/.test(lines[0])) {
+          return `<h4>${formatInlinePreview(lines[0].replace(/^##\s+/, ''))}</h4>`;
         }
-        return `<p>${escapeHtml(block)}</p>`;
+        if (lines.length === 1 && /^###\s+/.test(lines[0])) {
+          return `<h5>${formatInlinePreview(lines[0].replace(/^###\s+/, ''))}</h5>`;
+        }
+        if (lines.every((l) => /^[-*]\s+/.test(l))) {
+          return `<ul>${lines.map((l) => `<li>${formatInlinePreview(l.replace(/^[-*]\s+/, ''))}</li>`).join('')}</ul>`;
+        }
+        if (lines.every((l) => /^\d+\.\s+/.test(l))) {
+          return `<ol>${lines.map((l) => `<li>${formatInlinePreview(l.replace(/^\d+\.\s+/, ''))}</li>`).join('')}</ol>`;
+        }
+        if (lines.length > 1 && (/^##\s+/.test(lines[0]) || lines[0].length <= 100)) {
+          return `<h4>${formatInlinePreview(lines[0].replace(/^#{2,3}\s+/, ''))}</h4><p>${formatInlinePreview(lines.slice(1).join(' '))}</p>`;
+        }
+        return `<p>${formatInlinePreview(block)}</p>`;
       }).join('')
       : '<p><em>Sin contenido aún. Haz clic en "✨ Generar borrador con IA" para crear una propuesta grounded en el catálogo UCG.</em></p>';
 
@@ -1462,6 +2056,58 @@
       ${summary ? `<p class="preview-deck">${escapeHtml(summary)}</p>` : ''}
       ${bodyHtml}
     `;
+  }
+
+  function computeSeoChecklist(title, summary, body, serverChecklist = null) {
+    const cleanBody = String(body || '').trim();
+    const words = cleanBody ? cleanBody.split(/\s+/).filter(Boolean).length : 0;
+    const h2Matches = cleanBody.match(/^##\s+.+$/gm) || [];
+    const readingMinutes = Math.max(1, Math.round(words / 180));
+    return {
+      indexable: serverChecklist?.indexable ?? true,
+      hasCanonical: serverChecklist?.hasCanonical ?? true,
+      hasStructuredData: serverChecklist?.hasStructuredData ?? true,
+      hasOpenGraph: serverChecklist?.hasOpenGraph ?? true,
+      wordCount: serverChecklist?.wordCount ?? words,
+      readingMinutes: serverChecklist?.readingMinutes ?? readingMinutes,
+      headingsCount: serverChecklist?.headingsCount ?? h2Matches.length,
+      titleLength: serverChecklist?.titleLength ?? String(title || '').trim().length,
+      summaryLength: serverChecklist?.summaryLength ?? String(summary || '').trim().length
+    };
+  }
+
+  function renderPublishedBanner(info) {
+    if (!els.cePublishedBanner) return;
+    const isPublished = info?.status === 'published';
+    const url = isPublished ? resolvePublishedUrl(info?.slug, info?.publishedUrl) : '';
+
+    if (!isPublished || !url) {
+      els.cePublishedBanner.hidden = true;
+      return;
+    }
+
+    els.cePublishedBanner.hidden = false;
+    if (els.cePublishedUrl) {
+      els.cePublishedUrl.href = url;
+      els.cePublishedUrl.textContent = url;
+    }
+    if (els.cePublishedOpen) {
+      els.cePublishedOpen.href = url;
+    }
+
+    const checklist = computeSeoChecklist(info.title, info.summary, info.body, info.seoChecklist);
+    if (els.ceSeoChips) {
+      const chips = [
+        checklist.indexable ? '<span class="seo-chip">✓ Indexable (index, follow)</span>' : '',
+        checklist.hasCanonical ? '<span class="seo-chip">✓ Canonical</span>' : '',
+        checklist.hasStructuredData ? '<span class="seo-chip">✓ JSON-LD Article + Course</span>' : '',
+        checklist.hasOpenGraph ? '<span class="seo-chip">✓ OpenGraph / Twitter</span>' : '',
+        `<span class="seo-chip is-stat">${formatInt(checklist.wordCount)} palabras</span>`,
+        `<span class="seo-chip is-stat">~${checklist.readingMinutes} min lectura</span>`,
+        `<span class="seo-chip is-stat">${checklist.headingsCount} secciones H2</span>`
+      ].filter(Boolean);
+      els.ceSeoChips.innerHTML = chips.join('');
+    }
   }
 
   function setStudioMode(mode) {
@@ -1504,31 +2150,47 @@
       `;
     }
 
+    const effectiveStatus = article?.status || planItem?.status || 'planned';
+    const effectiveSlug = article?.slug || planItem?.articleSlug || `guia-${prog.slug}`;
+    const effectiveTitle = article?.title || planItem?.title || `Guía: ${prog.title}`;
+    const effectiveSummary = article?.summary || planItem?.summary || prog.summary || '';
+    const effectiveBody = article?.body || planItem?.body || '';
+
     if (els.studioKeyword) {
       els.studioKeyword.value = article?.sourceQuery || planItem?.keyword || planItem?.searchQuestion || '';
     }
     if (els.studioTitle) {
-      els.studioTitle.value = article?.title || planItem?.title || `Guía: ${prog.title}`;
+      els.studioTitle.value = effectiveTitle;
     }
     if (els.studioSlug) {
-      els.studioSlug.value = article?.slug || planItem?.articleSlug || `guia-${prog.slug}`;
+      els.studioSlug.value = effectiveSlug;
     }
     if (els.studioSummary) {
-      els.studioSummary.value = article?.summary || planItem?.summary || prog.summary || '';
+      els.studioSummary.value = effectiveSummary;
     }
     if (els.studioBody) {
-      els.studioBody.value = article?.body || planItem?.body || '';
+      els.studioBody.value = effectiveBody;
     }
 
     if (els.studioMetaStatus) {
-      if (article?.status === 'published') {
-        els.studioMetaStatus.textContent = `Publicada el ${formatDateEc(article.publishedAt || article.updatedAt)}`;
-      } else if (article?.status === 'draft' || planItem?.status === 'draft') {
+      if (effectiveStatus === 'published') {
+        els.studioMetaStatus.textContent = `Publicada el ${formatDateEc(article?.publishedAt || planItem?.publishedAt || article?.updatedAt || planItem?.updatedAt)}`;
+      } else if (effectiveStatus === 'draft') {
         els.studioMetaStatus.textContent = `Borrador guardado (${formatDateEc(article?.updatedAt || planItem?.updatedAt)})`;
       } else {
         els.studioMetaStatus.textContent = 'Sin borrador guardado aún — genera uno con IA.';
       }
     }
+
+    renderPublishedBanner({
+      status: effectiveStatus,
+      slug: effectiveSlug,
+      publishedUrl: article?.publishedUrl || planItem?.publishedUrl || '',
+      seoChecklist: article?.seoChecklist || planItem?.seoChecklist || null,
+      title: effectiveTitle,
+      summary: effectiveSummary,
+      body: effectiveBody
+    });
 
     if (state.studioMode === 'preview') {
       renderStudioPreview();
@@ -1584,6 +2246,9 @@
 
     els.contentPlanList.innerHTML = visible.map((item) => {
       const selected = item.program === state.studioProgramSlug;
+      const publishedHref = item.status === 'published'
+        ? resolvePublishedUrl(item.articleSlug || item.slug, item.publishedUrl)
+        : '';
       return `
         <article class="plan-item${selected ? ' is-selected' : ''}" data-plan-program="${escapeHtml(item.program)}">
           <div class="plan-item-top">
@@ -1604,6 +2269,7 @@
           <div class="plan-item-actions">
             <button type="button" class="btn btn-ai btn-sm" data-quick-draft="${escapeHtml(item.program)}">✨ Generar borrador</button>
             <button type="button" class="btn btn-outline btn-sm" data-open-studio="${escapeHtml(item.program)}">Editar estudio</button>
+            ${publishedHref ? `<a class="btn btn-outline btn-sm" href="${escapeHtml(publishedHref)}" target="_blank" rel="noopener noreferrer">Ver página ↗</a>` : ''}
           </div>
         </article>
       `;
@@ -1627,6 +2293,10 @@
         selectStudioProgram(state.studioProgramSlug, false);
       }
       renderContentQueue();
+      if (state.seoLoaded && state.seoData) {
+        state.seoRows = buildMergedSeoRows(state.seoData);
+        renderSeoSection();
+      }
       if (els.contentSyncStatus) {
         els.contentSyncStatus.textContent = `Actualizado: ${formatDateEc(new Date().toISOString())}`;
       }
@@ -1709,9 +2379,33 @@
           status
         })
       });
-      state.studioArticleId = res.article?.id || state.studioArticleId;
-      showToast(status === 'published' ? 'Guía publicada correctamente' : 'Borrador guardado');
+      const savedArt = res.article || {};
+      const publishedUrl = status === 'published'
+        ? resolvePublishedUrl(savedArt.slug || slug, res.publishedUrl || savedArt.publishedUrl)
+        : '';
+
+      state.studioArticleId = savedArt.id || state.studioArticleId;
       await loadContent(true);
+
+      renderPublishedBanner({
+        status,
+        slug: savedArt.slug || slug,
+        publishedUrl,
+        seoChecklist: res.seoChecklist || savedArt.seoChecklist || null,
+        title: savedArt.title || title,
+        summary: savedArt.summary || summary,
+        body: savedArt.body || body
+      });
+
+      if (status === 'published') {
+        showToast(
+          'Guía SEO publicada correctamente',
+          'ok',
+          publishedUrl ? { label: 'Abrir página publicada ↗', href: publishedUrl } : null
+        );
+      } else {
+        showToast('Borrador guardado');
+      }
     } catch (err) {
       showToast(`Error al guardar: ${err.message}`, 'err');
     } finally {
@@ -2201,13 +2895,111 @@
       renderSeoSection();
     });
 
-    els.seoTableBody?.addEventListener('click', async (e) => {
-      const jumpBtn = e.target.closest('[data-seo-to-content]');
-      if (!jumpBtn) return;
-      const slug = jumpBtn.dataset.seoToContent;
+    const jumpToContentProgram = async (slug, keyword = '') => {
+      if (!slug) return;
       switchSection('content', true);
       if (!state.contentLoaded) await loadContent(false);
       selectStudioProgram(slug, false);
+      if (keyword && els.studioKeyword) els.studioKeyword.value = keyword;
+    };
+
+    els.seoTableBody?.addEventListener('click', (e) => {
+      const jumpBtn = e.target.closest('[data-seo-to-content]');
+      if (jumpBtn) jumpToContentProgram(jumpBtn.dataset.seoToContent);
+    });
+
+    els.seoMatrixSelectedBar?.addEventListener('click', (e) => {
+      const jumpBtn = e.target.closest('[data-seo-to-content]');
+      if (jumpBtn) jumpToContentProgram(jumpBtn.dataset.seoToContent);
+    });
+
+    els.seoTopKeywords?.addEventListener('click', (e) => {
+      const jumpBtn = e.target.closest('[data-seo-to-content]');
+      if (jumpBtn) jumpToContentProgram(jumpBtn.dataset.seoToContent);
+    });
+
+    const showMatrixTooltip = (bubbleEl) => {
+      if (!els.seoMatrixTooltip || !els.seoChartMatrixWrap || !bubbleEl) return;
+      const row = state.seoRows.find((r) => r.id === bubbleEl.dataset.matrixId);
+      if (!row) return;
+      const statusTxt = row.editorialStatus === 'published'
+        ? 'Publicada'
+        : row.editorialStatus === 'draft'
+          ? 'Borrador'
+          : 'Sin guía';
+      els.seoMatrixTooltip.innerHTML = `
+        <strong>${escapeHtml(row.shortTitle)}</strong>
+        <div>Keyword: ${escapeHtml(row.keyword || '—')}</div>
+        <div>Volumen: <b>${formatInt(row.volume || 0)}/mes</b> · CPC: <b>${row.cpc ? formatUsd(row.cpc) : '—'}</b></div>
+        <div>Dificultad: <b>${row.difficulty !== null ? `KD ${row.difficulty}` : '—'}</b> · Valor est.: <b>${formatUsd(row.trafficValue)}/mes</b></div>
+        <div>Estado: <b>${escapeHtml(statusTxt)}</b></div>
+      `;
+      els.seoMatrixTooltip.hidden = false;
+      const wrapRect = els.seoChartMatrixWrap.getBoundingClientRect();
+      const bRect = bubbleEl.getBoundingClientRect();
+      const left = Math.min(Math.max(8, bRect.left - wrapRect.left + bRect.width / 2 + 12), Math.max(8, wrapRect.width - 280));
+      const top = Math.max(8, bRect.top - wrapRect.top - 16);
+      els.seoMatrixTooltip.style.left = `${left}px`;
+      els.seoMatrixTooltip.style.top = `${top}px`;
+    };
+
+    els.seoChartMatrix?.addEventListener('mouseover', (e) => {
+      const bubble = e.target.closest('[data-matrix-id]');
+      if (bubble) showMatrixTooltip(bubble);
+    });
+    els.seoChartMatrix?.addEventListener('mouseout', (e) => {
+      if (e.target.closest('[data-matrix-id]') && els.seoMatrixTooltip) {
+        els.seoMatrixTooltip.hidden = true;
+      }
+    });
+    els.seoChartMatrix?.addEventListener('click', (e) => {
+      const bubble = e.target.closest('[data-matrix-id]');
+      if (!bubble) return;
+      const id = bubble.dataset.matrixId;
+      if (state.seoSelectedIds.has(id)) state.seoSelectedIds.delete(id);
+      else state.seoSelectedIds.add(id);
+      renderSeoSection();
+    });
+
+    const toggleAreaFromChart = (area) => {
+      if (!area) return;
+      state.seoFilters.area = state.seoFilters.area === area ? '' : area;
+      if (els.seoAreaFilter) els.seoAreaFilter.value = state.seoFilters.area;
+      renderSeoSection();
+    };
+    els.seoChartAreas?.addEventListener('click', (e) => {
+      const rowEl = e.target.closest('[data-area-bar]');
+      if (rowEl) toggleAreaFromChart(rowEl.dataset.areaBar);
+    });
+    els.seoChartAreas?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        const rowEl = e.target.closest('[data-area-bar]');
+        if (rowEl) {
+          e.preventDefault();
+          toggleAreaFromChart(rowEl.dataset.areaBar);
+        }
+      }
+    });
+
+    els.seoPlaybook?.addEventListener('click', (e) => {
+      const draftBtn = e.target.closest('[data-playbook-draft]');
+      if (draftBtn) {
+        jumpToContentProgram(draftBtn.dataset.playbookDraft, draftBtn.dataset.playbookKw || '');
+        return;
+      }
+      const aiBtn = e.target.closest('[data-playbook-ai]');
+      if (aiBtn) {
+        const idx = Number(aiBtn.dataset.playbookAi);
+        const card = state.playbookCards?.[idx];
+        if (!card) return;
+        if (Array.isArray(card.analyzeIds) && card.analyzeIds.length) {
+          state.seoSelectedIds = new Set(card.analyzeIds);
+        }
+        if (els.seoQuestion) els.seoQuestion.value = card.analyzeQuestion || '';
+        renderSeoSection();
+        runSeoAnalysis();
+        els.seoFindingsBox?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     });
 
     document.querySelectorAll('[data-seo-q]').forEach((btn) => {
@@ -2254,6 +3046,22 @@
     els.studioEditorForm?.addEventListener('submit', (e) => {
       e.preventDefault();
       saveStudioArticle('published');
+    });
+
+    els.ceCopyUrlBtn?.addEventListener('click', async () => {
+      const targetUrl = els.cePublishedUrl?.getAttribute('href') || '';
+      if (!targetUrl || targetUrl === '#') return;
+      const prev = els.ceCopyUrlBtn.textContent;
+      try {
+        await navigator.clipboard.writeText(targetUrl);
+        els.ceCopyUrlBtn.textContent = '¡Copiado!';
+        showToast('Enlace de la guía copiado al portapapeles');
+      } catch {
+        showToast(targetUrl);
+      }
+      window.setTimeout(() => {
+        if (els.ceCopyUrlBtn) els.ceCopyUrlBtn.textContent = prev;
+      }, 2200);
     });
 
     document.addEventListener('keydown', (e) => {
