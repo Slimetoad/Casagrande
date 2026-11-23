@@ -14,9 +14,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = resolve(__dirname, '..');
 const SITE_DIR = join(ROOT, 'site');
+const SITE_CRM_DIR = join(SITE_DIR, 'crm');
 const PUBLIC_DIR = join(ROOT, 'public');
 const PUBLIC_MEDIA_DIR = join(PUBLIC_DIR, 'media');
 const OUT_DIR = join(ROOT, 'dist-pages');
+const OUT_CRM_DIR = join(OUT_DIR, 'crm');
 const OUT_MEDIA_DIR = join(OUT_DIR, 'media');
 
 const FALLBACK_API_BASE = 'https://casagrande-posgrados-production.up.railway.app';
@@ -78,6 +80,7 @@ function build() {
 
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_MEDIA_DIR, { recursive: true });
+  mkdirSync(OUT_CRM_DIR, { recursive: true });
 
   const mediaBasenames = new Set([
     basename(brand.logo || '/media/ucg-logo.png'),
@@ -129,6 +132,8 @@ function build() {
 
   copyFileSync(join(SITE_DIR, 'styles.css'), join(OUT_DIR, 'styles.css'));
   copyFileSync(join(SITE_DIR, 'app.js'), join(OUT_DIR, 'app.js'));
+  copyFileSync(join(SITE_CRM_DIR, 'crm.css'), join(OUT_CRM_DIR, 'crm.css'));
+  copyFileSync(join(SITE_CRM_DIR, 'crm.js'), join(OUT_CRM_DIR, 'crm.js'));
 
   writeFileSync(join(OUT_DIR, 'config.json'), JSON.stringify(configObj, null, 2) + '\n', 'utf8');
   writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(staticPrograms, null, 2) + '\n', 'utf8');
@@ -139,6 +144,7 @@ function build() {
     .join('\n                ');
 
   let indexHtml = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
+  let crmIndexHtml = readFileSync(join(SITE_CRM_DIR, 'index.html'), 'utf8');
 
   const configTagRegex = /<script id="ucg-config" type="application\/json">[\s\S]*?<\/script>/;
   const catalogTagRegex = /<script id="catalog-data" type="application\/json">[\s\S]*?<\/script>/;
@@ -150,27 +156,36 @@ function build() {
   if (!catalogTagRegex.test(indexHtml)) {
     throw new Error('No se encontró <script id="catalog-data"> en site/index.html.');
   }
+  if (!configTagRegex.test(crmIndexHtml)) {
+    throw new Error('No se encontró <script id="ucg-config"> en site/crm/index.html.');
+  }
+  if (!catalogTagRegex.test(crmIndexHtml)) {
+    throw new Error('No se encontró <script id="catalog-data"> en site/crm/index.html.');
+  }
+
+  const inlineConfigScript = `<script id="ucg-config" type="application/json">${safeInlineJson(configObj)}</script>`;
+  const inlineCatalogScript = `<script id="catalog-data" type="application/json">${safeInlineJson(staticPrograms)}</script>`;
 
   indexHtml = indexHtml
-    .replace(
-      configTagRegex,
-      () => `<script id="ucg-config" type="application/json">${safeInlineJson(configObj)}</script>`
-    )
-    .replace(
-      catalogTagRegex,
-      () => `<script id="catalog-data" type="application/json">${safeInlineJson(staticPrograms)}</script>`
-    )
+    .replace(configTagRegex, () => inlineConfigScript)
+    .replace(catalogTagRegex, () => inlineCatalogScript)
     .replace(optionsMarker, () => programOptionsHtml);
 
-  writeFileSync(join(OUT_DIR, 'index.html'), indexHtml, 'utf8');
+  crmIndexHtml = crmIndexHtml
+    .replace(configTagRegex, () => inlineConfigScript)
+    .replace(catalogTagRegex, () => inlineCatalogScript);
 
-  verifyOutput(staticPrograms, indexHtml);
+  writeFileSync(join(OUT_DIR, 'index.html'), indexHtml, 'utf8');
+  writeFileSync(join(OUT_CRM_DIR, 'index.html'), crmIndexHtml, 'utf8');
+
+  verifyOutput(staticPrograms, indexHtml, crmIndexHtml);
 
   console.log(
     JSON.stringify(
       {
         ok: true,
         outDir: 'dist-pages',
+        pages: ['index.html', 'crm/index.html'],
         programsCount: staticPrograms.length,
         mediaCopied: mediaBasenames.size,
         apiBase,
@@ -182,9 +197,46 @@ function build() {
   );
 }
 
-function verifyOutput(staticPrograms, indexHtml) {
+function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
+  const rootMediaRefs = [
+    ...htmlText.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|crm\.css|crm\.js|favicon\.svg)[^"']*)["']/g),
+    ...cssText.matchAll(/url\(["']?(\/media\/[^)"']+)["']?\)/g)
+  ];
+  if (rootMediaRefs.length > 0) {
+    throw new Error(`Se detectaron rutas absolutas desde raíz en ${label}: ${rootMediaRefs.map((m) => m[1]).join(', ')}`);
+  }
+
+  const relRefs = [
+    ...Array.from(htmlText.matchAll(/(?:src|href|content)=["'](\.\.?\/[^"']+)["']/g), (m) => m[1]),
+    ...Array.from(cssText.matchAll(/url\(["']?(\.\.?\/[^)"']+)["']?\)/g), (m) => m[1])
+  ];
+
+  for (const ref of relRefs) {
+    const cleanRef = ref.split('?')[0].split('#')[0];
+    if (!cleanRef || cleanRef.endsWith('/')) {
+      const targetDir = resolve(baseDir, cleanRef || '.');
+      if (!existsSync(join(targetDir, 'index.html'))) {
+        throw new Error(`Directorio/enlace relativo roto en ${label}: ${ref}`);
+      }
+      continue;
+    }
+    const target = resolve(baseDir, cleanRef);
+    if (!existsSync(target)) {
+      throw new Error(`Referencia local rota en ${label}: ${ref}`);
+    }
+  }
+}
+
+function verifyOutput(staticPrograms, indexHtml, crmIndexHtml) {
   if (staticPrograms.length !== 34) {
     throw new Error(`Se esperaban 34 programas en el catálogo y se encontraron ${staticPrograms.length}.`);
+  }
+
+  if (/\bid=["']crm["']/.test(indexHtml)) {
+    throw new Error('dist-pages/index.html aún contiene la sección #crm incrustada.');
+  }
+  if (!indexHtml.includes('./crm/')) {
+    throw new Error('dist-pages/index.html debe enlazar al CRM dedicado (./crm/).');
   }
 
   for (const p of staticPrograms) {
@@ -199,27 +251,11 @@ function verifyOutput(staticPrograms, indexHtml) {
 
   const cssContent = readFileSync(join(OUT_DIR, 'styles.css'), 'utf8');
   const jsContent = readFileSync(join(OUT_DIR, 'app.js'), 'utf8');
+  const crmCssContent = readFileSync(join(OUT_CRM_DIR, 'crm.css'), 'utf8');
+  const crmJsContent = readFileSync(join(OUT_CRM_DIR, 'crm.js'), 'utf8');
 
-  const rootMediaRefs = [
-    ...indexHtml.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|favicon\.svg)[^"']*)["']/g),
-    ...cssContent.matchAll(/url\(["']?(\/media\/[^)"']+)["']?\)/g)
-  ];
-  if (rootMediaRefs.length > 0) {
-    throw new Error(`Se detectaron rutas absolutas desde raíz incompatibles con subruta GH Pages: ${rootMediaRefs.map((m) => m[1]).join(', ')}`);
-  }
-
-  const relRefs = [
-    ...Array.from(indexHtml.matchAll(/(?:src|href|content)=["'](\.\/[^"']+)["']/g), (m) => m[1]),
-    ...Array.from(cssContent.matchAll(/url\(["']?(\.\/[^)"']+)["']?\)/g), (m) => m[1])
-  ];
-
-  for (const ref of relRefs) {
-    const cleanRef = ref.split('?')[0].split('#')[0];
-    const target = join(OUT_DIR, cleanRef.slice(2));
-    if (!existsSync(target)) {
-      throw new Error(`Referencia local rota en dist-pages: ${ref}`);
-    }
-  }
+  verifyRelativeAssetRefs(OUT_DIR, indexHtml, cssContent, 'dist-pages/index.html');
+  verifyRelativeAssetRefs(OUT_CRM_DIR, crmIndexHtml, crmCssContent, 'dist-pages/crm/index.html');
 
   const secretPatterns = [
     /\bkey_[a-f0-9]{16,}/i,
@@ -229,7 +265,10 @@ function verifyOutput(staticPrograms, indexHtml) {
   for (const [label, text] of [
     ['index.html', indexHtml],
     ['styles.css', cssContent],
-    ['app.js', jsContent]
+    ['app.js', jsContent],
+    ['crm/index.html', crmIndexHtml],
+    ['crm/crm.css', crmCssContent],
+    ['crm/crm.js', crmJsContent]
   ]) {
     for (const pattern of secretPatterns) {
       if (pattern.test(text)) {

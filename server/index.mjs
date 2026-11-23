@@ -8,7 +8,7 @@ import { serve } from '../src/portal.js';
 import { brand, programs } from '../src/catalog.js';
 import { followupOnCapture } from '../src/capture-followup.js';
 import { withConversationWake } from '../src/conversation-wake.js';
-import { contactEmail } from '../src/contact-identity.js';
+import { contactEmail, isPhoneIdentity } from '../src/contact-identity.js';
 import { clean, matches, normalized, programFact } from '../src/providers.js';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -74,7 +74,7 @@ function applyCorsHeaders(response, origin, env, requestOrigin) {
   if (!origin || !isAllowedOrigin(origin, env, requestOrigin)) return response;
   const headers = new Headers(response.headers);
   headers.set('Access-Control-Allow-Origin', origin);
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Content-Type, Idempotency-Key');
   const vary = headers.get('Vary');
   headers.set('Vary', vary ? (vary.includes('Origin') ? vary : vary + ', Origin') : 'Origin');
@@ -112,41 +112,104 @@ async function handleHealth(env) {
   });
 }
 
-async function handlePublicCrm(env) {
-  if (!env.DB) {
-    return Response.json({ error: 'Base de datos no disponible.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
-  }
-  const [leadsRes, convRes, eventsRes, jobsRes, statsRes] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, email, phone, program, stage, source, consent_email, created_at, updated_at, context FROM leads ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 30'),
-    env.DB.prepare('SELECT id, lead_id, provider, kind, direction, excerpt, extraction, contact_name, contact_email, contact_phone, occurred_at FROM admissions_conversations ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT 30'),
-    env.DB.prepare('SELECT id, lead_id, type, description, created_at, actor FROM events ORDER BY created_at DESC, rowid DESC LIMIT 40'),
-    env.DB.prepare(`SELECT j.id, j.signal_id, j.lead_id, j.status, j.due_at, j.attempts, j.updated_at, j.provider_id,
-      s.channel, s.intent, s.decision, s.program
-      FROM conversation_nurture_jobs j
-      LEFT JOIN conversation_nurture_signals s ON s.id = j.signal_id
-      ORDER BY j.updated_at DESC, j.rowid DESC LIMIT 30`),
-    env.DB.prepare(`SELECT
-      (SELECT COUNT(*) FROM leads) AS total_leads,
-      (SELECT COUNT(*) FROM admissions_conversations WHERE provider='retell') AS retell_calls,
-      (SELECT COUNT(*) FROM leads WHERE email NOT LIKE 'intake:phone:%' AND email <> '' AND (json_extract(context, '$.emailConfirmed') = 1 OR consent_email = 1)) AS verified_emails,
-      (SELECT COUNT(*) FROM conversation_nurture_jobs WHERE status='accepted') AS recap_emails_sent,
-      (SELECT COUNT(*) FROM conversation_nurture_jobs WHERE status IN ('pending','processing')) AS pending_nurture_jobs`)
-  ]);
+const CRM_STAGES = ['Nuevo', 'En orientación', 'En postulación', 'Admitido', 'Matriculado', 'Cerrado'];
+const VALID_SIGNAL_INTENTS = new Set(['programa', 'inversion', 'cita', 'requisitos', 'solicitar_asesor', 'baja', 'postergar', 'desconocido']);
+const EMAIL_RE = /^[^<>@\s,;]+@[^<>@\s,;]+\.[^<>@\s,;]+$/;
 
-  const leads = (leadsRes.results || []).map(row => ({
+function crmJson(data, status = 200) {
+  return Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
+}
+
+function formatPublicLead(row) {
+  return {
     id: row.id,
     name: row.name,
     email: contactEmail(row.email),
     phone: row.phone,
     program: row.program,
     stage: row.stage,
-    source: row.source,
-    consent_email: row.consent_email,
+    owner: row.owner || '',
+    note: row.note || '',
+    next_action: row.next_action || '',
+    due_at: row.due_at || null,
+    paused: row.paused ?? 0,
+    score: row.score ?? 0,
+    consent_email: row.consent_email ?? 0,
+    consent_voice: row.consent_voice ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    context: safeJson(row.context, {})
-  }));
+    context: safeJson(row.context, {}),
+    revision: row.revision ?? 1
+  };
+}
 
+function cleanEmailBody(value, max = 8000) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max);
+}
+
+async function readJsonBody(request) {
+  try {
+    const parsed = await request.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseBoolBit(value) {
+  if (value === true || value === 1) return 1;
+  if (value === false || value === 0) return 0;
+  return null;
+}
+
+function parseIsoOrNull(value) {
+  if (value === null || value === '') return { ok: true, value: null };
+  if (typeof value !== 'string') return { ok: false };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: null };
+  const ts = Date.parse(trimmed);
+  if (!Number.isFinite(ts)) return { ok: false };
+  return { ok: true, value: new Date(ts).toISOString() };
+}
+
+function mapTemplateToIntent(template) {
+  const t = normalized(template || '');
+  if (VALID_SIGNAL_INTENTS.has(t)) return t;
+  if (/inversion|financ|precio|beca|costo/.test(t)) return 'inversion';
+  if (/cita|agenda|reunion/.test(t)) return 'cita';
+  if (/requisito|document|postul|admision/.test(t)) return 'requisitos';
+  if (/asesor|llamada/.test(t)) return 'solicitar_asesor';
+  return 'programa';
+}
+
+async function handlePublicCrm(env) {
+  if (!env.DB) {
+    return crmJson({ error: 'Base de datos no disponible.' }, 503);
+  }
+  const [leadsRes, tasksRes, convRes, eventsRes, jobsRes, stageRes, statsRes] = await env.DB.batch([
+    env.DB.prepare('SELECT id, name, email, phone, program, stage, owner, note, next_action, due_at, paused, score, consent_email, consent_voice, created_at, updated_at, context, revision FROM leads ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 100'),
+    env.DB.prepare("SELECT id, lead_id, title, status, due_at, created_at FROM tasks ORDER BY (status='pendiente') DESC, due_at IS NULL, due_at ASC, created_at DESC LIMIT 100"),
+    env.DB.prepare('SELECT id, lead_id, provider, kind, direction, excerpt, extraction, contact_name, contact_email, contact_phone, occurred_at FROM admissions_conversations ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT 50'),
+    env.DB.prepare('SELECT id, lead_id, type, description, created_at, actor FROM events ORDER BY created_at DESC, rowid DESC LIMIT 80'),
+    env.DB.prepare(`SELECT j.id, j.signal_id, j.lead_id, j.status, j.due_at, j.attempts, j.updated_at, j.provider_id,
+      s.channel, s.intent, s.decision, s.program, s.next_action AS subject, s.reason
+      FROM conversation_nurture_jobs j
+      LEFT JOIN conversation_nurture_signals s ON s.id = j.signal_id
+      ORDER BY j.updated_at DESC, j.rowid DESC LIMIT 60`),
+    env.DB.prepare('SELECT stage, COUNT(*) AS n FROM leads GROUP BY stage'),
+    env.DB.prepare(`SELECT
+      (SELECT COUNT(*) FROM leads) AS total_leads,
+      (SELECT COUNT(*) FROM admissions_conversations WHERE provider='retell') AS retell_calls,
+      (SELECT COUNT(*) FROM leads WHERE email NOT LIKE 'intake:phone:%' AND email <> '' AND (json_extract(context, '$.emailConfirmed') = 1 OR consent_email = 1)) AS verified_emails,
+      (SELECT COUNT(*) FROM conversation_nurture_jobs WHERE status='accepted') AS recap_emails_sent,
+      (SELECT COUNT(*) FROM conversation_nurture_jobs WHERE status IN ('pending','processing')) AS pending_nurture_jobs,
+      (SELECT COUNT(*) FROM tasks WHERE status='pendiente') AS open_tasks,
+      (SELECT COALESCE(ROUND(AVG(score)), 0) FROM leads) AS avg_score`)
+  ]);
+
+  const leads = (leadsRes.results || []).map(formatPublicLead);
   const conversations = (convRes.results || []).map(row => ({
     id: row.id,
     lead_id: row.lead_id,
@@ -160,23 +223,546 @@ async function handlePublicCrm(env) {
     contact_phone: row.contact_phone,
     occurred_at: row.occurred_at
   }));
+  const nurtureJobs = (jobsRes.results || []).map(row => ({
+    id: row.id,
+    signal_id: row.signal_id,
+    lead_id: row.lead_id,
+    status: row.status,
+    due_at: row.due_at,
+    attempts: row.attempts,
+    updated_at: row.updated_at,
+    provider_id: row.provider_id,
+    channel: row.channel || 'email',
+    intent: row.intent || 'programa',
+    decision: row.decision || 'respuesta_programada',
+    program: row.program || '',
+    subject: row.subject || null,
+    reason: row.reason || null
+  }));
+  const stageCounts = Object.fromEntries(CRM_STAGES.map(stage => [stage, 0]));
+  for (const row of stageRes.results || []) {
+    if (Object.hasOwn(stageCounts, row.stage)) stageCounts[row.stage] = row.n;
+  }
 
   const s = statsRes.results?.[0] || {};
-  return Response.json({
+  return crmJson({
     leads,
+    tasks: tasksRes.results || [],
     conversations,
     events: eventsRes.results || [],
-    nurtureJobs: jobsRes.results || [],
+    nurtureJobs,
     stats: {
       totalLeads: s.total_leads || 0,
       retellCalls: s.retell_calls || 0,
       verifiedEmails: s.verified_emails || 0,
       recapEmailsSent: s.recap_emails_sent || 0,
-      pendingNurtureJobs: s.pending_nurture_jobs || 0
+      pendingNurtureJobs: s.pending_nurture_jobs || 0,
+      openTasks: s.open_tasks || 0,
+      avgScore: s.avg_score || 0,
+      stageCounts
     }
-  }, {
-    headers: { 'Cache-Control': 'no-store' }
   });
+}
+
+async function handlePatchCrmLead(request, env, id) {
+  const existing = await env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(id).first();
+  if (!existing) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+
+  const updates = {};
+  const changes = [];
+
+  if (Object.hasOwn(body, 'stage')) {
+    if (!CRM_STAGES.includes(body.stage)) return crmJson({ error: 'Selecciona una etapa válida.' }, 422);
+    updates.stage = body.stage;
+    if (body.stage !== existing.stage) changes.push(`Etapa: ${existing.stage} → ${body.stage}`);
+  }
+  if (Object.hasOwn(body, 'owner')) {
+    if (typeof body.owner !== 'string') return crmJson({ error: 'Revisa el campo responsable.' }, 422);
+    updates.owner = clean(body.owner, 80);
+    if (updates.owner !== existing.owner) changes.push(updates.owner ? `Responsable: ${updates.owner}` : 'Responsable retirado');
+  }
+  if (Object.hasOwn(body, 'program')) {
+    if (typeof body.program !== 'string') return crmJson({ error: 'Selecciona un programa válido.' }, 422);
+    const slug = clean(body.program, 160);
+    if (slug && !programs.some(p => p.slug === slug)) return crmJson({ error: 'Programa fuera del catálogo oficial.' }, 422);
+    updates.program = slug;
+    if (slug !== existing.program) {
+      const title = programs.find(p => p.slug === slug)?.shortTitle || slug || 'Sin programa específico';
+      changes.push(`Programa: ${title}`);
+    }
+  }
+  if (Object.hasOwn(body, 'next_action')) {
+    if (typeof body.next_action !== 'string') return crmJson({ error: 'Revisa la próxima acción.' }, 422);
+    updates.next_action = clean(body.next_action, 200);
+    if (updates.next_action !== existing.next_action) changes.push(updates.next_action ? `Próxima acción: ${updates.next_action}` : 'Próxima acción retirada');
+  }
+  if (Object.hasOwn(body, 'due_at')) {
+    const parsedDate = parseIsoOrNull(body.due_at);
+    if (!parsedDate.ok) return crmJson({ error: 'Ingresa una fecha válida para due_at.' }, 422);
+    updates.due_at = parsedDate.value;
+    if (updates.due_at !== (existing.due_at || null)) changes.push(updates.due_at ? `Fecha límite: ${updates.due_at.slice(0, 10)}` : 'Fecha límite retirada');
+  }
+  if (Object.hasOwn(body, 'note')) {
+    if (typeof body.note !== 'string') return crmJson({ error: 'Revisa la nota.' }, 422);
+    updates.note = cleanEmailBody(body.note, 2000);
+    if (updates.note !== existing.note) changes.push('Nota actualizada');
+  }
+  if (Object.hasOwn(body, 'paused')) {
+    const bit = parseBoolBit(body.paused);
+    if (bit === null) return crmJson({ error: 'Valor de pausa no válido.' }, 422);
+    updates.paused = bit;
+    if (bit !== existing.paused) changes.push(bit ? 'Seguimiento pausado' : 'Seguimiento reanudado');
+  }
+  if (Object.hasOwn(body, 'score')) {
+    const n = Number(body.score);
+    if (!Number.isInteger(n) || n < 0 || n > 100 || body.score === '' || body.score === null || typeof body.score === 'boolean') {
+      return crmJson({ error: 'El puntaje debe ser un entero entre 0 y 100.' }, 422);
+    }
+    updates.score = n;
+    if (n !== existing.score) changes.push(`Puntaje: ${n}/100`);
+  }
+  if (Object.hasOwn(body, 'consent_email')) {
+    const bit = parseBoolBit(body.consent_email);
+    if (bit === null) return crmJson({ error: 'Valor de consentimiento de correo no válido.' }, 422);
+    updates.consent_email = bit;
+    if (bit !== existing.consent_email) changes.push(bit ? 'Correo autorizado' : 'Correo desactivado');
+  }
+  if (Object.hasOwn(body, 'consent_voice')) {
+    const bit = parseBoolBit(body.consent_voice);
+    if (bit === null) return crmJson({ error: 'Valor de consentimiento de voz no válido.' }, 422);
+    updates.consent_voice = bit;
+    if (bit !== existing.consent_voice) changes.push(bit ? 'Llamadas autorizadas' : 'Llamadas desactivadas');
+  }
+
+  const keys = Object.keys(updates);
+  if (!keys.length) return crmJson({ error: 'Indica al menos un campo para actualizar.' }, 422);
+
+  const nowIso = new Date().toISOString();
+  const actor = clean(body.actor, 80) || 'Admisiones';
+  const setClauses = keys.map(k => `${k} = ?`);
+  setClauses.push('updated_at = ?', 'revision = revision + 1');
+  const values = [...keys.map(k => updates[k]), nowIso, id];
+
+  const batch = [
+    env.DB.prepare(`UPDATE leads SET ${setClauses.join(', ')} WHERE id = ?`).bind(...values)
+  ];
+  if (changes.length) {
+    const eventType = Object.hasOwn(updates, 'stage') && updates.stage !== existing.stage ? 'etapa' : 'actualización';
+    batch.push(
+      env.DB.prepare('INSERT INTO events(id, lead_id, type, description, created_at, actor) VALUES(?, ?, ?, ?, ?, ?)')
+        .bind(crypto.randomUUID(), id, eventType, changes.join(' · ') + '.', nowIso, actor)
+    );
+  }
+  batch.push(env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(id));
+  const results = await env.DB.batch(batch);
+  const updated = results.at(-1)?.results?.[0];
+  return crmJson({ ok: true, lead: formatPublicLead(updated) });
+}
+
+async function handleCreateCrmNote(request, env, id) {
+  const existing = await env.DB.prepare('SELECT id FROM leads WHERE id = ?').bind(id).first();
+  if (!existing) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  const text = cleanEmailBody(body.text, 2000);
+  if (!text) return crmJson({ error: 'Escribe el contenido de la nota.' }, 422);
+  const actor = clean(body.actor, 80) || 'Admisiones';
+  const pinToLead = body.pinToLead !== false;
+  const nowIso = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  const batch = [
+    env.DB.prepare('INSERT INTO events(id, lead_id, type, description, created_at, actor) VALUES(?, ?, ?, ?, ?, ?)')
+      .bind(eventId, id, 'nota', text, nowIso, actor)
+  ];
+  if (pinToLead) {
+    batch.push(env.DB.prepare('UPDATE leads SET note = ?, updated_at = ? WHERE id = ?').bind(text, nowIso, id));
+  } else {
+    batch.push(env.DB.prepare('UPDATE leads SET updated_at = ? WHERE id = ?').bind(nowIso, id));
+  }
+  await env.DB.batch(batch);
+  return crmJson({
+    ok: true,
+    event: { id: eventId, lead_id: id, type: 'nota', description: text, created_at: nowIso, actor }
+  }, 201);
+}
+
+async function handleCreateCrmTask(request, env, id) {
+  const lead = await env.DB.prepare('SELECT id, next_action, due_at FROM leads WHERE id = ?').bind(id).first();
+  if (!lead) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  const title = clean(body.title, 200);
+  if (!title) return crmJson({ error: 'Indica el título de la tarea.' }, 422);
+  let dueAt;
+  if (Object.hasOwn(body, 'due_at') && body.due_at !== null && body.due_at !== '') {
+    const parsedDate = parseIsoOrNull(body.due_at);
+    if (!parsedDate.ok) return crmJson({ error: 'Ingresa una fecha válida para la tarea.' }, 422);
+    dueAt = parsedDate.value;
+  } else {
+    dueAt = new Date(Date.now() + 24 * 3600000).toISOString();
+  }
+  const actor = clean(body.actor, 80) || 'Admisiones';
+  const nowIso = new Date().toISOString();
+  const taskId = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO tasks(id, lead_id, title, status, due_at, created_at) VALUES(?, ?, ?, 'pendiente', ?, ?)")
+      .bind(taskId, id, title, dueAt, nowIso),
+    env.DB.prepare(`UPDATE leads SET
+      next_action = CASE WHEN trim(next_action) = '' THEN ? ELSE next_action END,
+      due_at = CASE WHEN trim(next_action) = '' THEN ? ELSE due_at END,
+      updated_at = ?
+      WHERE id = ?`).bind(title, dueAt, nowIso, id),
+    env.DB.prepare('INSERT INTO events(id, lead_id, type, description, created_at, actor) VALUES(?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), id, 'tarea', `Nueva tarea: ${title}`, nowIso, actor)
+  ]);
+  return crmJson({
+    ok: true,
+    task: { id: taskId, lead_id: id, title, status: 'pendiente', due_at: dueAt, created_at: nowIso }
+  }, 201);
+}
+
+async function handlePatchCrmTask(request, env, taskId) {
+  const existing = await env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(taskId).first();
+  if (!existing) return crmJson({ error: 'No encontramos esa tarea.' }, 404);
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  if (!['pendiente', 'hecha'].includes(body.status)) return crmJson({ error: 'El estado de la tarea debe ser pendiente o hecha.' }, 422);
+  const actor = clean(body.actor, 80) || 'Admisiones';
+  const nowIso = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE tasks SET status = ? WHERE id = ?').bind(body.status, taskId),
+    env.DB.prepare('UPDATE leads SET updated_at = ? WHERE id = ?').bind(nowIso, existing.lead_id),
+    env.DB.prepare('INSERT INTO events(id, lead_id, type, description, created_at, actor) VALUES(?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), existing.lead_id, 'tarea', `${body.status === 'hecha' ? 'Tarea completada' : 'Tarea reabierta'}: ${existing.title}`, nowIso, actor)
+  ]);
+  return crmJson({ ok: true, task: { ...existing, status: body.status } });
+}
+
+async function handleSendNurtureEmail(request, env, id) {
+  const lead = await env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(id).first();
+  if (!lead) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+  const realEmail = contactEmail(lead.email);
+  if (!realEmail || isPhoneIdentity(lead.email) || !EMAIL_RE.test(realEmail)) {
+    return crmJson({ error: 'El expediente no cuenta con un correo electrónico válido.' }, 422);
+  }
+  const body = await readJsonBody(request);
+  if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+  const subject = clean(body.subject, 200);
+  const emailBody = cleanEmailBody(body.body, 8000);
+  if (!subject || !emailBody) return crmJson({ error: 'Ingresa un asunto y un mensaje válidos.' }, 422);
+  const template = clean(body.template, 80);
+  const actor = clean(body.actor, 80) || 'Admisiones';
+
+  if (!env.RESEND_API_KEY || !env.RESEND_FROM) {
+    return crmJson({ error: 'El servicio de correo Resend no está configurado.' }, 503);
+  }
+
+  let resendRes;
+  try {
+    resendRes = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + env.RESEND_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: env.RESEND_FROM,
+        to: [realEmail],
+        subject,
+        text: emailBody,
+        tags: [{ name: 'flujo', value: 'crm-nurture' }, { name: 'lead', value: lead.id }]
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+  } catch {
+    return crmJson({ error: 'No fue posible conectar con Resend para enviar el correo.' }, 502);
+  }
+
+  if (!resendRes.ok) {
+    return crmJson({ error: `Resend devolvió el código ${resendRes.status} al enviar el correo.` }, 502);
+  }
+
+  const resendData = await resendRes.json().catch(() => null);
+  const providerId = typeof resendData?.id === 'string' && resendData.id.trim() ? resendData.id.trim().slice(0, 160) : '';
+  if (!providerId) {
+    return crmJson({ error: 'Resend no devolvió un identificador de envío válido.' }, 502);
+  }
+
+  const nowIso = new Date().toISOString();
+  const signalId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const intent = mapTemplateToIntent(template);
+  const programObj = programs.find(p => p.slug === lead.program) || null;
+  const reason = template ? `Correo manual desde CRM (${template})` : 'Correo manual enviado desde CRM';
+
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO events(id, lead_id, type, description, created_at, actor) VALUES(?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), lead.id, 'correo', `Correo enviado · ${subject}${template ? ` (${template})` : ''}`, nowIso, actor),
+    env.DB.prepare(`INSERT INTO conversation_nurture_signals
+      (id, lead_id, channel, intent, confidence, received_at, recorded_at, decision, reason, next_action, program, source_url, stage, lead_program, transactional, lead_revision, write_token)
+      VALUES(?, ?, 'email', ?, 'alta', ?, ?, 'respuesta_programada', ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
+      .bind(signalId, lead.id, intent, nowIso, nowIso, reason, subject, lead.program || null, programObj?.url || null, lead.stage, lead.program || '', lead.revision, crypto.randomUUID()),
+    env.DB.prepare(`INSERT INTO conversation_nurture_jobs(id, signal_id, lead_id, status, due_at, attempts, updated_at, provider_id)
+      VALUES(?, ?, ?, 'accepted', ?, 1, ?, ?)`)
+      .bind(jobId, signalId, lead.id, nowIso, nowIso, providerId),
+    env.DB.prepare('UPDATE leads SET updated_at = ? WHERE id = ?').bind(nowIso, lead.id)
+  ]);
+
+  return crmJson({
+    ok: true,
+    providerId,
+    job: {
+      id: jobId,
+      signal_id: signalId,
+      lead_id: lead.id,
+      status: 'accepted',
+      due_at: nowIso,
+      attempts: 1,
+      updated_at: nowIso,
+      provider_id: providerId,
+      channel: 'email',
+      intent,
+      subject,
+      reason
+    }
+  });
+}
+
+function buildFallbackAiDraft({ lead, program, context, retellData, goal, publicBase }) {
+  const firstName = clean(lead.name, 80).replace(/^(?:Aspirante por teléfono|Aspirante por correo)$/i, '').trim();
+  const greeting = firstName ? `Hola ${firstName},` : 'Estimado/a aspirante,';
+  const base = (publicBase || 'https://slimetoad.github.io/Casagrande').replace(/\/+$/, '');
+  const title = program?.title || context.programInterest || retellData.programInterest || 'Posgrados de Universidad Casa Grande';
+  const tuition = program
+    ? (Number.isFinite(program.price) && program.price > 0
+      ? new Intl.NumberFormat('es-EC', { style: 'currency', currency: 'USD' }).format(program.price) + ' USD (inversión publicada)'
+      : 'Consultar con Admisiones')
+    : 'Consultar con Admisiones según el programa elegido';
+  const summaryNote = retellData.summary || context.callSummary || context.consulta || '';
+  const questionNote = retellData.keyQuestions || context.keyQuestions || '';
+  const obstacleNote = retellData.obstacles || context.obstacles || '';
+  const g = normalized(goal || '');
+
+  let subject = program ? `Orientación sobre ${program.shortTitle || program.title} · Posgrados UCG` : 'Seguimiento de orientación · Posgrados UCG';
+  let bodyFocus = '';
+  let recommendedAction = 'Enviar correo de seguimiento y coordinar cita de orientación';
+
+  if (/financ|inversion|costo|precio|beca/.test(g)) {
+    subject = `Inversión y opciones sobre ${program?.shortTitle || 'Posgrados UCG'}`;
+    bodyFocus = `Con respecto a la inversión del programa, el valor publicado es ${tuition}. Si desea revisar formas de pago o confirmar condiciones de la convocatoria vigente, con gusto le orientamos.`;
+    recommendedAction = 'Confirmar opciones de pago y financiamiento vigente con el aspirante';
+  } else if (/requisit|postul|document/.test(g)) {
+    subject = `Requisitos y postulación · ${program?.shortTitle || 'Posgrados UCG'}`;
+    bodyFocus = `Para avanzar con su postulación, puede revisar la ficha oficial y preparar su título de tercer nivel y documentación básica. Nuestro equipo puede verificar con usted cada paso de la convocatoria vigente.`;
+    recommendedAction = 'Verificar documentación de postulación y requisitos de admisión';
+  } else if (/cita|agenda/.test(g)) {
+    subject = `Agendemos su asesoría · ${program?.shortTitle || 'Posgrados UCG'}`;
+    bodyFocus = `Nos encantaría conversar con usted en una breve asesoría personalizada para resolver sus inquietudes sobre horarios, malla y admisión. Puede agendar directamente en ${base}/#cita.`;
+    recommendedAction = 'Confirmar fecha y hora de entrevista de orientación';
+  } else if (lead.stage === 'En postulación') {
+    subject = `Acompañamiento en su postulación · ${program?.shortTitle || 'Posgrados UCG'}`;
+    bodyFocus = 'Vemos que su proceso de postulación está en curso. Si tiene algún documento pendiente o requiere confirmar fechas de la cohorte, respóndanos por este medio para acompañarle.';
+    recommendedAction = 'Revisar hitos pendientes de postulación';
+  } else if (lead.stage === 'Admitido') {
+    subject = `Próximos pasos para su matrícula · ${program?.shortTitle || 'Posgrados UCG'}`;
+    bodyFocus = 'Felicitaciones por su avance en el proceso de admisión. Nuestro equipo está disponible para confirmar los pasos administrativos y fechas de matrícula.';
+    recommendedAction = 'Guiar al aspirante admitido hacia la matrícula';
+  } else {
+    bodyFocus = program
+      ? `Le compartimos los datos verificados de ${program.title}: modalidad ${program.mode || 'consultar con Admisiones'}, duración ${program.duration || 'consultar con Admisiones'}, estado de convocatoria "${program.admissionsStatus || 'Consultar convocatoria'}" e inversión ${tuition}.`
+      : 'En Universidad Casa Grande contamos con 34 maestrías en áreas de Negocios, Tecnología, Comunicación, Derecho, Educación, Salud y Arquitectura.';
+  }
+
+  const contextNotes = [
+    summaryNote ? `Tomamos nota de nuestra conversación previa: ${summaryNote}` : '',
+    questionNote ? `Sobre sus consultas (${questionNote}), con todo gusto podemos profundizar cada punto.` : '',
+    obstacleNote ? `Respecto a lo que nos comentó (${obstacleNote}), podemos revisar alternativas de horario o planificación junto con Admisiones.` : '',
+    context.city || retellData.city ? `Registro de ciudad/horizonte: ${[context.city || retellData.city, context.horizon || retellData.horizon].filter(Boolean).join(' · ')}.` : ''
+  ].filter(Boolean);
+
+  const links = [
+    program?.url ? `Ficha oficial UCG: ${program.url}` : `Catálogo oficial UCG: ${brand.catalogUrl}`,
+    program?.brochure ? `Folleto oficial (PDF): ${program.brochure}` : '',
+    `Agendar orientación: ${base}/#cita`
+  ].filter(Boolean).join('\n');
+
+  const body = [
+    greeting,
+    `Le saludamos cordialmente desde el equipo de Admisiones de Posgrados de la Universidad Casa Grande (Guayaquil, Ecuador). Gracias por su interés en ${title}.`,
+    bodyFocus,
+    contextNotes.join('\n'),
+    links,
+    `Quedamos atentos a su respuesta o si prefiere conversar directamente puede llamar al ${brand.admissionsPhone}.\n\nCordialmente,\nEquipo de Admisiones de Posgrados\nUniversidad Casa Grande`
+  ].filter(Boolean).join('\n\n');
+
+  return { subject, body, recommendedAction };
+}
+
+async function handleAiDraft(request, env, id) {
+  const lead = await env.DB.prepare('SELECT * FROM leads WHERE id = ?').bind(id).first();
+  if (!lead) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+  const body = (await readJsonBody(request)) || {};
+  const goal = clean(body.template || body.goal, 80);
+  const instructions = clean(body.instructions, 300);
+
+  const [convRes, eventsRes] = await env.DB.batch([
+    env.DB.prepare('SELECT excerpt, extraction, occurred_at FROM admissions_conversations WHERE lead_id = ? ORDER BY occurred_at DESC LIMIT 3').bind(id),
+    env.DB.prepare('SELECT type, description, created_at, actor FROM events WHERE lead_id = ? ORDER BY created_at DESC LIMIT 8').bind(id)
+  ]);
+
+  const context = safeJson(lead.context, {});
+  const latestConv = convRes.results?.[0];
+  const latestExtraction = safeJson(latestConv?.extraction, {});
+  const retellData = safeJson(latestExtraction.retellData, {});
+  const program = programs.find(p => p.slug === lead.program) || null;
+  const publicBase = typeof env.PUBLIC_BASE_URL === 'string' && env.PUBLIC_BASE_URL.trim()
+    ? env.PUBLIC_BASE_URL.trim().replace(/\/+$/, '')
+    : 'https://slimetoad.github.io/Casagrande';
+
+  const fallback = buildFallbackAiDraft({ lead, program, context, retellData, goal, publicBase });
+
+  if (!env.ANTHROPIC_API_KEY) {
+    return crmJson({ ok: true, source: 'template', ...fallback });
+  }
+
+  try {
+    const firstName = clean(lead.name, 80).replace(/^(?:Aspirante por teléfono|Aspirante por correo)$/i, '').trim() || 'Aspirante';
+    const promptData = {
+      aspirante: {
+        nombre: firstName,
+        etapa: lead.stage,
+        ciudad: context.city || retellData.city || null,
+        modalidadPreferida: context.modality || retellData.modality || null,
+        horizonteInicio: context.horizon || retellData.horizon || null,
+        formacion: context.academicBackground || retellData.academicBackground || null,
+        preguntas: context.keyQuestions || retellData.keyQuestions || null,
+        obstaculos: context.obstacles || retellData.obstacles || null,
+        resumenLlamada: context.callSummary || retellData.summary || latestConv?.excerpt || null,
+        notaEquipo: lead.note || null
+      },
+      eventosRecientes: (eventsRes.results || []).slice(0, 5).map(e => `${e.type}: ${e.description}`),
+      objetivoPlantilla: goal || 'seguimiento personalizado',
+      instruccionAsesor: instructions || null,
+      programaCatalogo: program ? programFact(program) : {
+        ofertaGeneral: '34 maestrías en Negocios, Tecnología, Comunicación, Derecho, Educación, Salud y Arquitectura',
+        fuente: brand.catalogUrl
+      },
+      enlaces: {
+        portalCita: publicBase + '/#cita',
+        telefonoAdmisiones: brand.admissionsPhone
+      }
+    };
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+        max_tokens: 900,
+        system: 'Eres Oficial de Admisiones de Posgrados de la Universidad Casa Grande (Guayaquil, Ecuador). Redacta en español ecuatoriano cálido, profesional y respetuoso usando "usted". Usa ÚNICAMENTE los datos verificados de programaCatalogo y aspirante: NUNCA inventes precios, becas ni fechas de inicio (si inversion es null, indica "consultar con Admisiones"). Responde EXCLUSIVAMENTE con un objeto JSON válido con las claves exactas: "subject" (string), "body" (string), "recommendedAction" (string).',
+        messages: [{ role: 'user', content: JSON.stringify(promptData) }]
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    if (!res.ok) {
+      return crmJson({ ok: true, source: 'template', ...fallback });
+    }
+    const aiRes = await res.json();
+    const rawText = (aiRes?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
+    const cleanedJson = rawText.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
+    const parsed = JSON.parse(cleanedJson);
+    const subject = clean(parsed?.subject, 200);
+    const bodyText = cleanEmailBody(parsed?.body, 8000);
+    const recommendedAction = clean(parsed?.recommendedAction, 200);
+    if (!subject || !bodyText || !recommendedAction) {
+      return crmJson({ ok: true, source: 'template', ...fallback });
+    }
+    return crmJson({ ok: true, source: 'anthropic', subject, body: bodyText, recommendedAction });
+  } catch {
+    return crmJson({ ok: true, source: 'template', ...fallback });
+  }
+}
+
+async function handleDeleteCrmLead(env, id) {
+  const existing = await env.DB.prepare('SELECT id FROM leads WHERE id = ?').bind(id).first();
+  if (!existing) return crmJson({ error: 'No encontramos ese expediente.' }, 404);
+
+  const tablesRes = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+  const existingTables = new Set((tablesRes.results || []).map(r => r.name));
+  const dependentTables = [
+    'tasks',
+    'events',
+    'jobs',
+    'whatsapp_jobs',
+    'whatsapp_consents',
+    'lead_submissions',
+    'admissions_replies',
+    'admissions_reply_routes',
+    'admissions_phone_identities',
+    'admissions_appointments',
+    'conversation_nurture_jobs',
+    'conversation_nurture_signals',
+    'admissions_conversations',
+    'admissions_cases',
+    'admissions_stage_evidence'
+  ];
+
+  const batch = [];
+  for (const table of dependentTables) {
+    if (existingTables.has(table)) {
+      batch.push(env.DB.prepare(`DELETE FROM ${table} WHERE lead_id = ?`).bind(id));
+    }
+  }
+  batch.push(env.DB.prepare('DELETE FROM leads WHERE id = ?').bind(id));
+  await env.DB.batch(batch);
+  return crmJson({ ok: true, deleted: id });
+}
+
+async function routePublicCrm(request, env, path) {
+  if (!env.DB) return crmJson({ error: 'Base de datos no disponible.' }, 503);
+
+  if (path === '/api/public/crm') {
+    if (['GET', 'HEAD'].includes(request.method)) {
+      const res = await handlePublicCrm(env);
+      return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
+    }
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+
+  let match;
+  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})$/))) {
+    if (request.method === 'PATCH') return handlePatchCrmLead(request, env, match[1]);
+    if (request.method === 'DELETE') return handleDeleteCrmLead(env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/notes$/))) {
+    if (request.method === 'POST') return handleCreateCrmNote(request, env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/tasks$/))) {
+    if (request.method === 'POST') return handleCreateCrmTask(request, env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if ((match = path.match(/^\/api\/public\/crm\/tasks\/([\w.-]{1,120})$/))) {
+    if (request.method === 'PATCH') return handlePatchCrmTask(request, env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/nurture-email$/))) {
+    if (request.method === 'POST') return handleSendNurtureEmail(request, env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if ((match = path.match(/^\/api\/public\/crm\/leads\/([\w.-]{1,120})\/ai-draft$/))) {
+    if (request.method === 'POST') return handleAiDraft(request, env, match[1]);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  return crmJson({ error: 'Ruta de CRM no encontrada.' }, 404);
 }
 
 async function handleCatalogLookup(request) {
@@ -260,7 +846,7 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
       return Response.json({ error: 'Origen no permitido.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
     }
     const headers = new Headers({
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Idempotency-Key',
       'Access-Control-Max-Age': '86400',
       'Cache-Control': 'no-store'
@@ -278,11 +864,11 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
     if (request.method === 'HEAD') {
       response = new Response(null, { status: response.status, headers: response.headers });
     }
-  } else if (path === '/api/public/crm' && ['GET', 'HEAD'].includes(request.method)) {
-    response = await handlePublicCrm(env);
-    if (request.method === 'HEAD') {
-      response = new Response(null, { status: response.status, headers: response.headers });
+  } else if (path === '/api/public/crm' || path.startsWith('/api/public/crm/')) {
+    if (!['GET', 'HEAD'].includes(request.method) && originHeader && !isAllowedOrigin(originHeader, env, url.origin)) {
+      return crmJson({ error: 'Origen no permitido.' }, 403);
     }
+    response = await routePublicCrm(request, env, path);
   } else if (path === '/api/retell/catalog-lookup' && request.method === 'POST') {
     response = await handleCatalogLookup(request);
   } else {

@@ -419,3 +419,212 @@ test('respeta opt_out, consent_email false, migraciones idempotentes, CORS y cat
   assert.equal(lookup.ok, true);
   assert.equal(lookup.programs[0].slug, 'maestria-en-ciberseguridad');
 });
+
+test('endpoints CRM de seguimiento, notas, tareas, borrador IA, correo Resend y borrado funcionan extremo a extremo', async t => {
+  const { env, DB, ctx } = makeEnv(':memory:');
+  t.after(() => DB.close());
+
+  const origin = 'https://slimetoad.github.io';
+  const baseUrl = 'https://crm.example.up.railway.app';
+
+  // CORS preflight must advertise GET, POST, PATCH, DELETE, OPTIONS
+  const corsRes = await handleHttpRequest(new Request(baseUrl + '/api/public/crm/leads/abc', {
+    method: 'OPTIONS',
+    headers: { Origin: origin }
+  }), env, ctx);
+  assert.equal(corsRes.status, 204);
+  assert.equal(corsRes.headers.get('Access-Control-Allow-Origin'), origin);
+  assert.equal(corsRes.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
+
+  // Create a lead via POST /api/leads
+  const createRes = await handleHttpRequest(new Request(baseUrl + '/api/leads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin, 'Sec-Fetch-Site': 'cross-site' },
+    body: JSON.stringify({
+      name: 'Valeria Cedeño',
+      email: 'valeria.cedeno@example.org',
+      phone: '0994443322',
+      program: 'maestria-en-ciberseguridad',
+      source: 'Formulario web',
+      consentEmail: false,
+      consentVoice: false,
+      context: { ciudad: 'Manta', horizonte: 'Próxima convocatoria' }
+    })
+  }), env, ctx);
+  assert.equal(createRes.status, 201);
+
+  const initialCrm = await (await handleHttpRequest(new Request(baseUrl + '/api/public/crm', { headers: { Origin: origin } }), env, ctx)).json();
+  assert.equal(initialCrm.leads.length, 1);
+  const leadId = initialCrm.leads[0].id;
+  assert.ok(Array.isArray(initialCrm.tasks));
+  assert.equal(initialCrm.stats.stageCounts.Nuevo, 1);
+  assert.equal(initialCrm.stats.openTasks, 1);
+
+  // PATCH /api/public/crm/leads/:id (stage, score, owner, note, due_at, paused, consents)
+  const patchRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({
+      stage: 'En orientación',
+      score: 88,
+      owner: 'Carolina Mendoza',
+      next_action: 'Enviar ficha y coordinar llamada',
+      due_at: '2026-12-01T15:00:00.000Z',
+      paused: false,
+      consent_email: true,
+      consent_voice: true
+    })
+  }), env, ctx);
+  assert.equal(patchRes.status, 200);
+  assert.equal(patchRes.headers.get('Access-Control-Allow-Origin'), origin);
+  const patched = await patchRes.json();
+  assert.equal(patched.ok, true);
+  assert.equal(patched.lead.stage, 'En orientación');
+  assert.equal(patched.lead.score, 88);
+  assert.equal(patched.lead.owner, 'Carolina Mendoza');
+  assert.equal(patched.lead.consent_email, 1);
+  assert.equal(patched.lead.consent_voice, 1);
+  assert.equal(patched.lead.revision, 2);
+
+  // Invalid stage / score must return 422
+  const badPatch = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage: 'Inventada' })
+  }), env, ctx);
+  assert.equal(badPatch.status, 422);
+
+  // POST /api/public/crm/leads/:id/notes
+  const noteRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ text: 'Trabaja en seguridad bancaria y prefiere tutorías virtuales.', actor: 'Carolina' })
+  }), env, ctx);
+  assert.equal(noteRes.status, 201);
+  const noteData = await noteRes.json();
+  assert.equal(noteData.ok, true);
+  assert.equal(noteData.event.type, 'nota');
+  assert.equal(DB.raw.prepare('SELECT note FROM leads WHERE id=?').get(leadId).note, 'Trabaja en seguridad bancaria y prefiere tutorías virtuales.');
+
+  // POST /api/public/crm/leads/:id/tasks + PATCH /api/public/crm/tasks/:taskId
+  const taskRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ title: 'Validar título de tercer nivel', due_at: '2026-12-03T14:00:00.000Z' })
+  }), env, ctx);
+  assert.equal(taskRes.status, 201);
+  const createdTask = (await taskRes.json()).task;
+  assert.equal(createdTask.status, 'pendiente');
+
+  const taskPatchRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/tasks/${createdTask.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ status: 'hecha', actor: 'Carolina' })
+  }), env, ctx);
+  assert.equal(taskPatchRes.status, 200);
+  assert.equal((await taskPatchRes.json()).task.status, 'hecha');
+
+  // POST /api/public/crm/leads/:id/ai-draft (fallback template grounded in catalog)
+  const draftFallbackRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/ai-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ template: 'requisitos' })
+  }), env, ctx);
+  assert.equal(draftFallbackRes.status, 200);
+  const fallbackDraft = await draftFallbackRes.json();
+  assert.equal(fallbackDraft.ok, true);
+  assert.equal(fallbackDraft.source, 'template');
+  assert.match(fallbackDraft.subject, /Ciberseguridad/i);
+  assert.match(fallbackDraft.body, /Hola Valeria Cedeño,/);
+  assert.match(fallbackDraft.body, /Universidad Casa Grande/);
+  assert.ok(fallbackDraft.recommendedAction);
+
+  // POST /api/public/crm/leads/:id/ai-draft (Anthropic mocked) + POST /nurture-email (Resend mocked)
+  const sentEmails = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url === 'https://api.anthropic.com/v1/messages') {
+      return Response.json({
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            subject: 'Seguimiento Maestría en Ciberseguridad · UCG',
+            body: 'Hola Valeria,\n\nCon gusto le compartimos la ficha oficial de la Maestría en Ciberseguridad en modalidad en línea (2 semestres). La inversión y convocatoria vigente se confirman con Admisiones.\n\nCordialmente,\nAdmisiones Posgrados UCG',
+            recommendedAction: 'Confirmar fecha de entrevista'
+          })
+        }]
+      });
+    }
+    assert.equal(url, 'https://api.resend.com/emails');
+    sentEmails.push(JSON.parse(options.body));
+    return Response.json({ id: 'resend-manual-001' });
+  });
+
+  const aiEnv = { ...env, ANTHROPIC_API_KEY: 'test-anthropic-key', ANTHROPIC_MODEL: 'claude-haiku-5-5' };
+  const draftAiRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/ai-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ template: 'ficha' })
+  }), aiEnv, ctx);
+  assert.equal(draftAiRes.status, 200);
+  const aiDraft = await draftAiRes.json();
+  assert.equal(aiDraft.source, 'anthropic');
+  assert.match(aiDraft.subject, /Ciberseguridad/);
+
+  const sendEmailRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}/nurture-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({
+      subject: aiDraft.subject,
+      body: aiDraft.body,
+      template: 'ficha',
+      actor: 'Carolina'
+    })
+  }), env, ctx);
+  assert.equal(sendEmailRes.status, 200);
+  const emailOut = await sendEmailRes.json();
+  assert.equal(emailOut.ok, true);
+  assert.equal(emailOut.providerId, 'resend-manual-001');
+  assert.equal(emailOut.job.status, 'accepted');
+  assert.equal(sentEmails.length, 1);
+  assert.deepEqual(sentEmails[0].to, ['valeria.cedeno@example.org']);
+
+  // Phone-only lead cannot receive nurture-email (422)
+  const phoneLeadId = 'phone-only-crm-test';
+  const nowIso = new Date().toISOString();
+  DB.raw.prepare("INSERT INTO leads(id,name,email,phone,program,source,created_at,updated_at,pref_token) VALUES(?,?,?,?,?,?,?,?,?)")
+    .run(phoneLeadId, 'Aspirante por teléfono', 'intake:phone:' + phoneLeadId, '+593991111111', '', 'Llamada entrante', nowIso, nowIso, 'a'.repeat(64));
+  const rejectPhoneEmail = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${phoneLeadId}/nurture-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: 'Hola', body: 'Mensaje' })
+  }), env, ctx);
+  assert.equal(rejectPhoneEmail.status, 422);
+
+  // Verify GET /api/public/crm enriched stats, tasks, nurtureJobs
+  const enrichedCrm = await (await handleHttpRequest(new Request(baseUrl + '/api/public/crm'), env, ctx)).json();
+  assert.equal(enrichedCrm.stats.totalLeads, 2);
+  assert.equal(enrichedCrm.stats.stageCounts['En orientación'], 1);
+  assert.equal(enrichedCrm.stats.stageCounts.Nuevo, 1);
+  assert.equal(enrichedCrm.stats.recapEmailsSent, 1);
+  assert.equal(enrichedCrm.stats.avgScore, 44);
+  assert.ok(enrichedCrm.nurtureJobs.some(j => j.provider_id === 'resend-manual-001' && j.subject === aiDraft.subject));
+
+  // DELETE /api/public/crm/leads/:id deletes lead and dependent rows cleanly
+  const delRes = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+    method: 'DELETE',
+    headers: { Origin: origin }
+  }), env, ctx);
+  assert.equal(delRes.status, 200);
+  assert.equal(delRes.headers.get('Access-Control-Allow-Origin'), origin);
+  assert.equal((await delRes.json()).deleted, leadId);
+  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM leads WHERE id=?').get(leadId).n, 0);
+  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM tasks WHERE lead_id=?').get(leadId).n, 0);
+  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM conversation_nurture_jobs WHERE lead_id=?').get(leadId).n, 0);
+
+  // Deleting unknown lead returns 404
+  const delMissing = await handleHttpRequest(new Request(baseUrl + `/api/public/crm/leads/${leadId}`, {
+    method: 'DELETE'
+  }), env, ctx);
+  assert.equal(delMissing.status, 404);
+});
+

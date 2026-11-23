@@ -3,7 +3,6 @@
 
   const DEFAULT_API_BASE = 'https://casagrande-posgrados-production.up.railway.app';
   const DEFAULT_VOICE_PHONE = '+19124915544';
-  const PLACEHOLDER_EMAIL_PREFIX = 'intake:phone:';
 
   const state = {
     apiBase: DEFAULT_API_BASE,
@@ -17,11 +16,7 @@
       mode: '',
       family: '',
       openOnly: false
-    },
-    crmFilter: 'all',
-    crmData: null,
-    crmTimer: null,
-    isLoadingCrm: false
+    }
   };
 
   const els = {
@@ -67,15 +62,6 @@
     selectedProgramBanner: document.getElementById('selected-program-banner'),
     selectedProgramName: document.getElementById('selected-program-name'),
     clearSelectedProgram: document.getElementById('clear-selected-program'),
-    crmRefreshBtn: document.getElementById('crm-refresh-btn'),
-    crmAutoRefresh: document.getElementById('crm-auto-refresh'),
-    crmSyncStatus: document.getElementById('crm-sync-status'),
-    crmError: document.getElementById('crm-error'),
-    crmLeadsList: document.getElementById('crm-leads-list'),
-    kpiTotalLeads: document.getElementById('kpi-total-leads'),
-    kpiRetellCalls: document.getElementById('kpi-retell-calls'),
-    kpiVerifiedEmails: document.getElementById('kpi-verified-emails'),
-    kpiRecapsSent: document.getElementById('kpi-recaps-sent'),
     footerApiInfo: document.getElementById('footer-api-info')
   };
 
@@ -108,17 +94,6 @@
       currency: 'USD',
       maximumFractionDigits: 0
     }).format(value) + ' USD';
-  }
-
-  function formatDateEc(iso) {
-    if (!iso) return 'Reciente';
-    const d = new Date(iso);
-    if (Number.isNaN(d.valueOf())) return String(iso);
-    return new Intl.DateTimeFormat('es-EC', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: 'America/Guayaquil'
-    }).format(d);
   }
 
   function normalizeText(value) {
@@ -591,268 +566,18 @@
 
       const selectedProg = state.programBySlug.get(program);
       els.leadSuccessMsg.textContent = data.message ||
-        `Registramos tu solicitud${selectedProg ? ' para ' + selectedProg.shortTitle : ''}. Ya puedes verla en el CRM en vivo.`;
+        `Registramos tu solicitud${selectedProg ? ' para ' + selectedProg.shortTitle : ''}. El equipo de Admisiones podrá revisar tu ficha en el CRM.`;
       els.leadSuccess.hidden = false;
       els.leadForm.reset();
       if (els.leadConsentEmail) els.leadConsentEmail.checked = true;
       updatePhoneRequirement();
       selectProgramInForm('', false);
-      loadCrm();
     } catch (err) {
       els.leadError.textContent = err?.message || 'No pudimos conectar con el servidor de admisiones. Intenta nuevamente.';
       els.leadError.hidden = false;
     } finally {
       els.leadSubmitBtn.disabled = false;
       els.leadSubmitBtn.textContent = prevText;
-    }
-  }
-
-  function formatNurtureBadge(status, providerId, isRetell, consentEmail) {
-    if (!status) {
-      if (!isRetell && consentEmail) {
-        return '<span class="crm-tag crm-tag-web">Seguimiento web autorizado</span>';
-      }
-      return '<span class="crm-tag crm-tag-neutral">Sin correo automático</span>';
-    }
-    const labels = {
-      accepted: 'Recap enviado (accepted)',
-      sent: 'Recap enviado (sent)',
-      pending: 'Recap pendiente',
-      processing: 'Enviando recap…',
-      failed: 'Error en envío',
-      skipped: 'Omitido / sin permiso',
-      uncertain: 'Estado por confirmar'
-    };
-    const cls = status === 'accepted' || status === 'sent'
-      ? 'crm-tag-verified'
-      : status === 'pending' || status === 'processing'
-        ? 'crm-tag-pending'
-        : status === 'failed'
-          ? 'crm-tag-err'
-          : 'crm-tag-neutral';
-    const titleAttr = providerId ? ` title="ID Resend: ${escapeHtml(providerId)}"` : '';
-    return `<span class="crm-tag ${cls}"${titleAttr}>${escapeHtml(labels[status] || status)}</span>`;
-  }
-
-  function enrichCrmData(raw) {
-    const leads = Array.isArray(raw?.leads) ? raw.leads : [];
-    const conversations = Array.isArray(raw?.conversations) ? raw.conversations : [];
-    const nurtureJobs = Array.isArray(raw?.nurtureJobs) ? raw.nurtureJobs : [];
-
-    const convByLead = new Map();
-    for (const c of conversations) {
-      const leadId = c.lead_id || c.leadId;
-      if (!leadId) continue;
-      if (!convByLead.has(leadId)) convByLead.set(leadId, []);
-      convByLead.get(leadId).push(c);
-    }
-
-    const jobsByLead = new Map();
-    for (const j of nurtureJobs) {
-      const leadId = j.lead_id || j.leadId;
-      if (!leadId) continue;
-      if (!jobsByLead.has(leadId)) jobsByLead.set(leadId, []);
-      jobsByLead.get(leadId).push(j);
-    }
-
-    const enrichedLeads = leads.map((lead) => {
-      const ctx = parseJsonSafe(lead.context, {});
-      const leadConvs = convByLead.get(lead.id) || [];
-      const latestConv = leadConvs[0] || null;
-      const extRaw = parseJsonSafe(latestConv?.extraction, {});
-      const ext = parseJsonSafe(extRaw.retellData, extRaw);
-      const leadJobs = jobsByLead.get(lead.id) || [];
-      const latestJob = leadJobs[0] || null;
-
-      const isRetell = String(lead.source || '').toLowerCase().includes('retell') ||
-        latestConv?.provider === 'retell';
-
-      const emailRaw = String(lead.email || '');
-      const hasRealEmail = Boolean(emailRaw && !emailRaw.startsWith(PLACEHOLDER_EMAIL_PREFIX));
-      const email = hasRealEmail ? emailRaw : '';
-      const phone = lead.phone || latestConv?.contact_phone || '';
-
-      const emailConfirmed = Boolean(
-        ctx.emailConfirmed ??
-        ctx.email_confirmed_by_spelling ??
-        ext.emailConfirmed ??
-        ext.email_confirmed_by_spelling ??
-        lead.emailConfirmed
-      );
-
-      const phoneConfirmed = Boolean(
-        ctx.phoneConfirmed ??
-        ctx.phone_confirmed_by_readback ??
-        ext.phoneConfirmed ??
-        ext.phone_confirmed_by_readback ??
-        lead.phoneConfirmed
-      );
-
-      const prog = state.programBySlug.get(lead.program);
-      const programTitle = prog?.title ||
-        ctx.programInterest ||
-        ext.programInterest ||
-        lead.program ||
-        'Orientación general de posgrados';
-
-      const summary = ctx.callSummary ||
-        ctx.call_summary_es ||
-        ext.summary ||
-        ext.call_summary_es ||
-        latestConv?.excerpt ||
-        ctx.consulta ||
-        '';
-
-      const chips = [];
-      if (ctx.city || ctx.ciudad || ext.city) chips.push(`Ciudad: ${ctx.city || ctx.ciudad || ext.city}`);
-      if (ctx.modality || ext.modality) chips.push(`Modalidad: ${ctx.modality || ext.modality}`);
-      if (ctx.horizon || ctx.horizonte || ext.horizon) chips.push(`Inicio: ${ctx.horizon || ctx.horizonte || ext.horizon}`);
-      if (ctx.academicBackground || ext.academicBackground) chips.push(`Perfil: ${ctx.academicBackground || ext.academicBackground}`);
-      if (ctx.keyQuestions || ext.keyQuestions) chips.push(`Consultó: ${ctx.keyQuestions || ext.keyQuestions}`);
-      if (ctx.obstacles || ext.obstacles) chips.push(`Consideración: ${ctx.obstacles || ext.obstacles}`);
-      if (ctx.solicitaCita) chips.push('Solicitó cita');
-
-      return {
-        id: lead.id,
-        name: lead.name || latestConv?.contact_name || 'Aspirante sin nombre',
-        email,
-        phone,
-        emailConfirmed,
-        phoneConfirmed,
-        programTitle,
-        stage: lead.stage || 'Nuevo',
-        source: lead.source || (isRetell ? 'Llamada Retell' : 'Formulario web'),
-        isRetell,
-        summary,
-        chips,
-        recapStatus: latestJob?.status || lead.recapStatus || '',
-        recapProviderId: latestJob?.provider_id || latestJob?.providerId || '',
-        consentEmail: Boolean(lead.consent_email),
-        updatedAt: lead.updated_at || lead.updatedAt || lead.created_at || lead.createdAt || ''
-      };
-    });
-
-    const stats = raw?.stats || {};
-    const totalLeads = stats.totalLeads ?? stats.total_leads ?? enrichedLeads.length;
-    const retellCalls = stats.retellCalls ?? stats.retell_calls ??
-      (conversations.filter((c) => c.provider === 'retell').length ||
-        enrichedLeads.filter((l) => l.isRetell).length);
-    const verifiedEmails = stats.verifiedEmails ?? stats.verified_emails ??
-      enrichedLeads.filter((l) => l.emailConfirmed || (!l.isRetell && l.email)).length;
-    const recapEmailsSent = stats.recapEmailsSent ?? stats.recaps_sent ?? stats.emailsSent ??
-      nurtureJobs.filter((j) => j.status === 'accepted' || j.status === 'sent').length;
-
-    return {
-      stats: { totalLeads, retellCalls, verifiedEmails, recapEmailsSent },
-      leads: enrichedLeads
-    };
-  }
-
-  function renderCrm() {
-    if (!state.crmData) return;
-    const { stats, leads } = state.crmData;
-
-    if (els.kpiTotalLeads) els.kpiTotalLeads.textContent = String(stats.totalLeads);
-    if (els.kpiRetellCalls) els.kpiRetellCalls.textContent = String(stats.retellCalls);
-    if (els.kpiVerifiedEmails) els.kpiVerifiedEmails.textContent = String(stats.verifiedEmails);
-    if (els.kpiRecapsSent) els.kpiRecapsSent.textContent = String(stats.recapEmailsSent);
-
-    const visible = leads.filter((lead) => {
-      if (state.crmFilter === 'retell') return lead.isRetell;
-      if (state.crmFilter === 'web') return !lead.isRetell;
-      return true;
-    });
-
-    if (!visible.length) {
-      const phoneLabel = formatVoicePhone(state.voicePhone) || 'nuestra Oficial de Admisiones IA';
-      els.crmLeadsList.innerHTML = `<div class="crm-empty">
-        No hay registros en esta vista todavía. Llama al <strong>${escapeHtml(phoneLabel)}</strong> o envía una solicitud en el formulario para verla aparecer en vivo.
-      </div>`;
-      return;
-    }
-
-    els.crmLeadsList.innerHTML = visible.map((lead) => `
-      <article class="crm-lead-card${lead.isRetell ? ' is-retell' : ''}">
-        <div class="crm-lead-identity">
-          <h3>${escapeHtml(lead.name)}</h3>
-          <div class="crm-lead-meta">
-            <span class="crm-tag ${lead.isRetell ? 'crm-tag-retell' : 'crm-tag-web'}">${escapeHtml(lead.source)}</span>
-            <span class="crm-tag crm-tag-stage">${escapeHtml(lead.stage)}</span>
-          </div>
-          <p class="crm-program-name">${escapeHtml(lead.programTitle)}</p>
-          <span class="crm-timestamp">Actualizado: ${escapeHtml(formatDateEc(lead.updatedAt))}</span>
-        </div>
-
-        <div class="crm-contact-lines">
-          <div class="crm-contact-row">
-            <span class="crm-contact-label">Correo:</span>
-            <span>${lead.email ? escapeHtml(lead.email) : '<em>No proporcionado</em>'}</span>
-            ${lead.emailConfirmed ? '<span class="crm-tag crm-tag-verified">✓ Deletreado</span>' : ''}
-          </div>
-          <div class="crm-contact-row">
-            <span class="crm-contact-label">Teléfono:</span>
-            <span>${lead.phone ? escapeHtml(lead.phone) : '<em>No proporcionado</em>'}</span>
-            ${lead.phoneConfirmed ? '<span class="crm-tag crm-tag-verified">✓ Confirmado</span>' : ''}
-          </div>
-          <div class="crm-email-status-row">
-            <span class="crm-contact-label">Resend:</span>
-            ${formatNurtureBadge(lead.recapStatus, lead.recapProviderId, lead.isRetell, lead.consentEmail)}
-          </div>
-        </div>
-
-        <div class="crm-summary-col">
-          <span class="crm-summary-title">${lead.isRetell ? 'Resumen de llamada (Español)' : 'Detalle de consulta'}</span>
-          <p>${lead.summary ? escapeHtml(lead.summary) : '<em>Sin resumen adicional registrado.</em>'}</p>
-          ${lead.chips.length ? `<div class="crm-context-chips">
-            ${lead.chips.map((c) => `<span class="crm-context-chip">${escapeHtml(c)}</span>`).join('')}
-          </div>` : ''}
-        </div>
-      </article>
-    `).join('');
-  }
-
-  async function loadCrm() {
-    if (state.isLoadingCrm) return;
-    state.isLoadingCrm = true;
-    if (els.crmSyncStatus) els.crmSyncStatus.textContent = 'Actualizando CRM…';
-    if (els.crmError) els.crmError.hidden = true;
-
-    try {
-      const res = await fetch(`${state.apiBase}/api/public/crm`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' }
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const payload = await res.json();
-      state.crmData = enrichCrmData(payload);
-      renderCrm();
-      if (els.crmSyncStatus) {
-        els.crmSyncStatus.textContent = `Última actualización: ${formatDateEc(new Date().toISOString())}`;
-      }
-    } catch {
-      if (els.crmError) {
-        els.crmError.textContent = `No pudimos cargar el CRM en vivo desde ${state.apiBase}/api/public/crm.`;
-        els.crmError.hidden = false;
-      }
-      if (els.crmSyncStatus) {
-        els.crmSyncStatus.textContent = 'Error de sincronización con el backend.';
-      }
-    } finally {
-      state.isLoadingCrm = false;
-    }
-  }
-
-  function setupAutoRefresh() {
-    if (state.crmTimer) {
-      window.clearInterval(state.crmTimer);
-      state.crmTimer = null;
-    }
-    if (els.crmAutoRefresh?.checked) {
-      state.crmTimer = window.setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          loadCrm();
-        }
-      }, 15000);
     }
   }
 
@@ -946,23 +671,6 @@
 
     els.leadConsentVoice?.addEventListener('change', updatePhoneRequirement);
     els.leadForm?.addEventListener('submit', submitLeadForm);
-
-    els.crmRefreshBtn?.addEventListener('click', () => {
-      checkHealth();
-      loadCrm();
-    });
-
-    els.crmAutoRefresh?.addEventListener('change', setupAutoRefresh);
-
-    document.querySelectorAll('[data-crm-filter]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        state.crmFilter = btn.dataset.crmFilter || 'all';
-        document.querySelectorAll('[data-crm-filter]').forEach((b) => {
-          b.classList.toggle('is-active', b === btn);
-        });
-        renderCrm();
-      });
-    });
   }
 
   async function init() {
@@ -987,8 +695,6 @@
     updatePhoneRequirement();
     bindEvents();
     checkHealth();
-    loadCrm();
-    setupAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
