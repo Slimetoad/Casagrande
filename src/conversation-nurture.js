@@ -29,6 +29,26 @@ const labels={
 };
 
 const dateBefore=(date,difference)=>new Date(Date.parse(date)-difference).toISOString();
+function publicPortalBase(env) {
+  const raw=typeof env?.PUBLIC_BASE_URL==='string'?env.PUBLIC_BASE_URL.trim().replace(/\/+$/,''):'';
+  if(/^https:\/\//i.test(raw))return raw;
+  return publicOrigin(env);
+}
+function preferencesOrigin(env) {
+  const raw=typeof env?.API_BASE_URL==='string'?env.API_BASE_URL.trim().replace(/\/+$/,''):'';
+  if(/^https?:\/\//i.test(raw)) {
+    try{return new URL(raw).origin;}catch{/* ignore invalid API_BASE_URL */}
+  }
+  if(typeof env?.RAILWAY_PUBLIC_DOMAIN==='string' && /^[a-z0-9.-]+$/i.test(env.RAILWAY_PUBLIC_DOMAIN.trim())) {
+    return 'https://'+env.RAILWAY_PUBLIC_DOMAIN.trim();
+  }
+  return env?.PUBLIC_BASE_URL;
+}
+function displayApplicantName(raw) {
+  const value=typeof raw==='string'?raw.replace(/[\u0000-\u001f\u007f<>]/g,' ').replace(/\s+/g,' ').trim():'';
+  if(!value || /^(?:aspirante por teléfono|aspirante por correo|nombre reservado|n\/a|desconocido)$/i.test(value))return '';
+  return value;
+}
 function institutionalUrl(value) {
   try {
     const url=new URL(value);
@@ -36,6 +56,96 @@ function institutionalUrl(value) {
         !url.username && !url.password && !url.port)return url.href;
   }catch{/* The catalog can omit an external application link. */}
   return null;
+}
+
+export function makeCallRecapDraft({program=null,stage='Nuevo',base='',institutional=false,lead=null,retellData={}}={}) {
+  const cleanBase=String(base||'').replace(/\/+$/,'');
+  const appointmentUrl=cleanBase?cleanBase+'/#cita':'/#cita';
+  const catalogPortalUrl=cleanBase?cleanBase+'/#programas':'/#programas';
+  const name=displayApplicantName(retellData?.applicantName || lead?.name);
+  const greeting=name?'Hola '+name+',':'Hola,';
+  const title=program?.title || retellData?.programInterest || 'Posgrados de Universidad Casa Grande';
+  const subject=program
+    ?'Resumen de su llamada · '+(program.shortTitle||program.title)+' — Posgrados UCG'
+    :'Resumen de su llamada de orientación · Posgrados UCG';
+  const thanks='Muchas gracias por comunicarse con el equipo de Admisiones de Posgrados de la Universidad Casa Grande (Guayaquil, Ecuador). Fue un gusto conversar con usted y compartirle orientación sobre nuestras maestrías.';
+
+  const recapItems=[];
+  if(retellData?.summary)recapItems.push(retellData.summary);
+  const contextLines=[
+    retellData?.programInterest && (!program || retellData.programInterest.toLowerCase()!==program.title.toLowerCase())
+      ?'Programa o área de interés: '+retellData.programInterest:'',
+    retellData?.city?'Ciudad: '+retellData.city:'',
+    retellData?.modality?'Modalidad preferida: '+retellData.modality:'',
+    retellData?.horizon?'Horizonte de inicio estimado: '+retellData.horizon:'',
+    retellData?.academicBackground?'Formación previa: '+retellData.academicBackground:''
+  ].filter(Boolean);
+  if(contextLines.length)recapItems.push(contextLines.join('\n'));
+  const recapSection=recapItems.length
+    ?'Resumen de nuestra conversación:\n'+recapItems.join('\n\n')
+    :'Resumen de nuestra conversación:\nRevisamos su consulta sobre la oferta de posgrados de la Universidad Casa Grande y los pasos recomendados para continuar con su proceso.';
+
+  const official=institutionalUrl(program?.url);
+  const brochure=institutionalUrl(program?.brochure);
+  const registration=institutionalUrl(program?.applicationUrl);
+  const source=official||brand.catalogUrl;
+
+  let programSection;
+  if(program) {
+    const tuition=Number.isFinite(program.price) && program.price>0
+      ?new Intl.NumberFormat('es-EC',{style:'currency',currency:'USD'}).format(program.price)+' (inversión publicada total; confirmar facilidades de pago vigentes con Admisiones)'
+      :'Consultar con Admisiones';
+    programSection=[
+      'Detalles verificados del programa — '+program.title+':',
+      '• Área y título: '+program.area+(program.degree?' · '+program.degree:''),
+      '• Modalidad publicada: '+(program.mode||'Confirmar con Admisiones'),
+      '• Duración publicada: '+(program.duration||'Confirmar con Admisiones'),
+      '• Inversión publicada: '+tuition,
+      '• Estado de convocatoria: '+(program.admissionsStatus||'Consultar convocatoria'),
+      program.summary?'• Enfoque: '+program.summary:'',
+      '• Ficha oficial UCG: '+source,
+      brochure?'• Folleto / plan de estudios (PDF): '+brochure:'',
+      program.admissionsStatus!=='Inscripciones cerradas' && registration?'• Inscripción en línea UCG: '+registration:'',
+      cleanBase?'• Ver catálogo de maestrías en el portal: '+catalogPortalUrl:''
+    ].filter(Boolean).join('\n');
+  } else {
+    programSection=[
+      'Información verificada de Posgrados UCG:',
+      '• Oferta académica: 34 maestrías en áreas de Negocios, Tecnología, Comunicación, Derecho, Educación, Salud y Arquitectura.',
+      '• Inversión y convocatorias: Se confirman directamente con Admisiones según el programa y cohorte de su interés.',
+      '• Catálogo oficial UCG: '+brand.catalogUrl,
+      cleanBase?'• Catálogo interactivo en el portal: '+catalogPortalUrl:''
+    ].filter(Boolean).join('\n');
+  }
+
+  const confirmedEmail=retellData?.confirmedEmail || lead?.email || '';
+  const confirmedPhone=retellData?.confirmedPhone || lead?.phone || '';
+  const contactLines=['Datos de contacto confirmados:'];
+  if(confirmedEmail)contactLines.push('• Correo electrónico: '+confirmedEmail+(retellData?.emailConfirmed?' (verificado letra por letra)':''));
+  if(confirmedPhone)contactLines.push('• Teléfono / WhatsApp: '+confirmedPhone+(retellData?.phoneConfirmed?' (verificado por lectura)':''));
+
+  const stageNote=stage==='En postulación'
+    ?' Como su expediente ya se encuentra en postulación, un asesor puede revisar sus documentos pendientes.'
+    :stage==='Admitido'
+      ?' Si necesita confirmar pasos administrativos de matrícula, nuestro equipo le acompañará.'
+      :'';
+  const nextStep='Si desea resolver alguna inquietud adicional sobre '+title+', puede responder directamente a este correo o agendar una cita de orientación personalizada en '+appointmentUrl+'.'+stageNote+
+    ' También puede comunicarse con Admisiones al '+brand.admissionsPhone+'.';
+  const signature=institutional?'Equipo de Admisiones de Posgrados\nUniversidad Casa Grande':pilotSender;
+
+  return {
+    subject,
+    text:[
+      greeting,
+      thanks,
+      recapSection,
+      programSection,
+      contactLines.length>1?contactLines.join('\n'):'',
+      nextStep,
+      'Fuente de la universidad: '+source,
+      signature
+    ].filter(Boolean).join('\n\n')
+  };
 }
 function makeDraft(intent,program,stage,base='',institutional=false) {
   const visit=program?base+'/programas/'+encodeURIComponent(program.slug):base+'/programas';
@@ -95,13 +205,14 @@ export function previewNurturePlan(facts={},options={}) {
     'Conservar la pausa y registrar cuándo desea retomar la conversación si existe un acuerdo.',240);
   if(intent==='baja')return plan('revision_humana','Verificar la baja solicitada','La preferencia de contacto requiere confirmación.',
     'Suspender la cadencia y verificar qué canal solicitó desactivar.',60);
-  if(!trusted || intent==='desconocido')return plan('revision_humana','Revisar la consulta del aspirante','La intención requiere lectura humana.',
+  const isRetellVoiceRecap=channel==='voice' && (facts.retellRecap===true || (consentEmail===true && facts.contactPreference==='email'));
+  if(!trusted || (intent==='desconocido' && !isRetellVoiceRecap))return plan('revision_humana','Revisar la consulta del aspirante','La intención requiere lectura humana.',
     stageTask,240);
   if(paused)return plan('revision_humana','Revisar la conversación en pausa','El expediente conserva una pausa registrada.',
     'Revisar el mensaje y los acuerdos antes de retomar el caso.',240);
-  if(intent==='solicitar_asesor')return plan('revision_humana','Atender la solicitud de un asesor','La persona solicitó atención humana.',
+  if(intent==='solicitar_asesor' && !isRetellVoiceRecap)return plan('revision_humana','Atender la solicitud de un asesor','La persona solicitó atención humana.',
     stageTask,60);
-  if((!consentEmail && !transactional) || (channel==='voice' && facts.contactPreference!=='email') ||
+  if((!consentEmail && !transactional) || (channel==='voice' && facts.contactPreference!=='email' && facts.retellRecap!==true) ||
       (facts.contactPreference && facts.contactPreference!=='email'))
     return plan('revision_humana','Orientar por el canal solicitado','La consulta requiere un canal autorizado y acorde a la preferencia de la persona.',
       'Revisar el pedido y los permisos vigentes en el expediente.',240);
@@ -110,14 +221,21 @@ export function previewNurturePlan(facts={},options={}) {
     'Leer la conversación antes de preparar otro contacto.',240);
   if(!dispatch)return plan('revision_humana','Preparar una respuesta para admisiones','El canal automático de correo está pendiente de habilitación.',
     stageTask,240);
-  if(intent!=='cita' && !program && !(transactional && intent==='programa'))return plan('revision_humana','Identificar la maestría consultada','Falta identificar una ficha que respalde la respuesta.',
+  if(intent!=='cita' && !program && !(transactional && intent==='programa') && !isRetellVoiceRecap)return plan('revision_humana','Identificar la maestría consultada','Falta identificar una ficha que respalde la respuesta.',
     'Confirmar el programa de interés antes de responder.',240);
-  if(intent==='cita' && options.activeAppointment)return plan('revision_humana','Revisar la cita existente','El calendario registra una cita confirmada o una solicitud pendiente.',
+  if(intent==='cita' && options.activeAppointment && !isRetellVoiceRecap)return plan('revision_humana','Revisar la cita existente','El calendario registra una cita confirmada o una solicitud pendiente.',
     'Verificar el estado del calendario y el cambio que solicitó la persona.',240);
-  return {...plan('respuesta_programada','Preparar respuesta sobre '+labels[intent],transactional
-    ?'La persona inició una consulta directa verificada. Se prepara una única respuesta a esa consulta.'
-    :'La consulta tiene una intención clara y el expediente autoriza responder por correo.',
-    'Responder sobre '+labels[intent]+' y registrar el resultado de la gestión.',0,makeDraft(intent,program,stage,base,institutional)),transactional};
+  const draft=isRetellVoiceRecap
+    ?makeCallRecapDraft({intent,program,stage,base,institutional,lead:options.lead,retellData:facts.retellData||options.retellData})
+    :makeDraft(intent,program,stage,base,institutional);
+  const title=isRetellVoiceRecap?'Enviar resumen de llamada por correo':'Preparar respuesta sobre '+labels[intent];
+  const reason=isRetellVoiceRecap
+    ?'La llamada registró un correo verificado y autorización para enviar el resumen y la ficha.'
+    :transactional
+      ?'La persona inició una consulta directa verificada. Se prepara una única respuesta a esa consulta.'
+      :'La consulta tiene una intención clara y el expediente autoriza responder por correo.';
+  return {...plan('respuesta_programada',title,reason,
+    'Responder sobre '+labels[intent]+' y registrar el resultado de la gestión.',0,draft),transactional};
 }
 
 const signalView=row=>({id:row.id,channel:row.channel,intent:row.intent,confidence:row.confidence,receivedAt:row.received_at,
@@ -191,7 +309,8 @@ export async function recordNurtureSignal(env,signal) {
   if(!env?.DB || !goodId(id) || !goodId(leadId) || !['email','voice'].includes(channel))return {handled:false};
   const input=signal.extraction||{};
   const extraction={intent:intents.has(input.intent)?input.intent:'desconocido',confidence:confidenceLevels.has(input.confidence)?input.confidence:'baja',
-    needsReview:input.needsReview!==false,program:input.program,contactPreference:input.contactPreference,optOutChannel:input.optOutChannel};
+    needsReview:input.needsReview!==false,program:input.program,contactPreference:input.contactPreference,optOutChannel:input.optOutChannel,
+    retellRecap:input.retellRecap===true,retellData:input.retellData};
   if(signal.consentRevoked===true && extraction.intent==='baja' && !input.optOutChannel)extraction.optOutChannel=channel;
   const date=now(),parsed=Date.parse(signal.receivedAt);
   const receivedAt=Number.isFinite(parsed)&&parsed<=Date.parse(date)+5*60000?new Date(parsed).toISOString():date;
@@ -222,6 +341,7 @@ export async function recordNurtureSignal(env,signal) {
 
 const eligibleJob=`FROM ${jobTable} j JOIN ${intakeTable} s ON s.id=j.signal_id
   JOIN leads l ON l.id=j.lead_id
+  LEFT JOIN admissions_conversations c ON c.id=s.id
   WHERE j.id=? AND j.status='processing' AND l.stage=s.stage AND l.program=s.lead_program AND l.paused=0
   AND l.stage NOT IN ('Cerrado','Matriculado') AND s.received_at>=? AND s.recorded_at>=?
   AND (l.consent_email=1 OR (s.transactional=1 AND s.channel='email' AND l.revision=s.lead_revision AND EXISTS(
@@ -237,12 +357,14 @@ const eligibleJob=`FROM ${jobTable} j JOIN ${intakeTable} s ON s.id=j.signal_id
   AND NOT EXISTS(SELECT 1 FROM ${jobTable} other WHERE other.lead_id=l.id AND other.id<>j.id AND
     (other.status IN ('processing','uncertain') OR (other.provider_id IS NOT NULL AND other.updated_at>=?)))`;
 async function dispatchable(db,id,date,startsAt) {
-  return select(db,`SELECT l.id,l.email,l.pref_token,s.intent,s.program,s.transactional,s.stage,s.received_at `+eligibleJob,
+  return select(db,`SELECT l.id,l.name,l.email,l.phone,l.pref_token,s.channel,s.intent,s.program,s.transactional,s.stage,s.received_at,
+    c.provider AS conversation_provider,c.extraction AS conversation_extraction `+eligibleJob,
     id,dateBefore(date,maxSignalAge),startsAt,dateBefore(date,cooldown)).first();
 }
 function emailPayload(env,job,lead,draft,replyTo,confirmation) {
-  const pref=new URL('/preferencias/'+encodeURIComponent(lead.pref_token),env.PUBLIC_BASE_URL);
-  const oneClick=new URL('/api/preferences/'+encodeURIComponent(lead.pref_token),env.PUBLIC_BASE_URL);
+  const prefBase=preferencesOrigin(env);
+  const pref=new URL('/preferencias/'+encodeURIComponent(lead.pref_token),prefBase);
+  const oneClick=new URL('/api/preferences/'+encodeURIComponent(lead.pref_token),prefBase);
   const institutional=env.INSTITUTIONAL_LIVE==='true';
   const info=lead.transactional?
     'Respondemos una vez a la consulta que enviaste al equipo de orientación. Si deseas autorizar correos de seguimiento, indícaselo al equipo al responder.':
@@ -318,7 +440,14 @@ export async function runNurtureJobs(env,programs=catalog) {
       if(!before || (before.program && !program)) {
         await skipped();counts.skipped++;return;
       }
-      draft=makeDraft(before.intent,program,before.stage,publicOrigin(env),env.INSTITUTIONAL_LIVE==='true');
+      let conversationFacts={};
+      if(before.conversation_extraction) {
+        try{conversationFacts=JSON.parse(before.conversation_extraction)||{};}catch{conversationFacts={};}
+      }
+      const useCallRecap=before.channel==='voice' && (conversationFacts.retellRecap===true || conversationFacts.contactPreference==='email' || before.conversation_provider==='retell');
+      draft=useCallRecap
+        ?makeCallRecapDraft({intent:before.intent,program,stage:before.stage,base:publicPortalBase(env),institutional:env.INSTITUTIONAL_LIVE==='true',lead:before,retellData:conversationFacts.retellData||{}})
+        :makeDraft(before.intent,program,before.stage,publicOrigin(env),env.INSTITUTIONAL_LIVE==='true');
       replyTo=await recruitmentReplyTo(env,before)||env.RESEND_REPLY_TO;
       confirmation=before.transactional?await leadConfirmationUrl(publicOrigin(env),before,before.received_at):'';
       const current=await dispatchable(db,job.id,now(),startsAt);

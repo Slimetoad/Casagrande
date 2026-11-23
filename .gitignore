@@ -11,11 +11,13 @@
 
 # Generated builds and framework state
 /dist/
+/dist-pages/
 /.next/
 /.vinext/
 /out/
 next-env.d.ts
 *.tsbuildinfo
+*.sqlite*
 
 # Test output
 /coverage/

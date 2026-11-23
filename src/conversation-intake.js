@@ -1,6 +1,6 @@
 import { contactEmail, isPhoneIdentity, opaquePhoneIdentity } from './contact-identity.js';
 import { extractConversationFacts, redactConversationLine } from './conversation-extraction.js';
-import { channelPhone, digest, inHours } from './providers.js';
+import { channelPhone, digest, inHours, matches, normalized } from './providers.js';
 import { programs as catalog } from './catalog.js';
 import { tableExists } from './workspace.js';
 import { reasonConversation } from './conversation-model.js';
@@ -37,9 +37,9 @@ async function identity(db,contact,allowCreate) {
   const {leadId,email,phone} = contact;
   if (!leadId && !email && !phone) return {reason:'missing_identity'};
   const sql = [];
-  if (leadId) sql.push(stmt(db,'SELECT id,email,phone FROM leads WHERE id=?',leadId));
-  if (email) sql.push(stmt(db,'SELECT id,email,phone FROM leads WHERE email=?',email));
-  if (phone) sql.push(stmt(db,'SELECT id,email,phone FROM leads WHERE phone=? ORDER BY id LIMIT 2',phone));
+  if (leadId) sql.push(stmt(db,'SELECT id,name,email,phone,program,context,consent_email FROM leads WHERE id=?',leadId));
+  if (email) sql.push(stmt(db,'SELECT id,name,email,phone,program,context,consent_email FROM leads WHERE email=?',email));
+  if (phone) sql.push(stmt(db,'SELECT id,name,email,phone,program,context,consent_email FROM leads WHERE phone=? ORDER BY id LIMIT 2',phone));
   const results = await db.batch(sql);
   let offset = 0;
   const linked = leadId ? results[offset++].results[0] : null;
@@ -53,7 +53,7 @@ async function identity(db,contact,allowCreate) {
   const conflicts = email && !isPhoneIdentity(known.email) && known.email.toLowerCase()!==email ||
     phone && known.phone && channelPhone(known.phone)!==phone;
   if (different || conflicts) return {reason:'identity_conflict'};
-  return {leadId:known.id,upgradeEmail:allowCreate && email && phone && byPhone.length===1 && isPhoneIdentity(known.email) ? email : ''};
+  return {leadId:known.id,known,upgradeEmail:allowCreate && email && phone && byPhone.length===1 && isPhoneIdentity(known.email) ? email : ''};
 }
 
 function eventTime(value) {
@@ -63,6 +63,68 @@ function eventTime(value) {
 
 function extracted(value) {
   try { return JSON.parse(value); } catch { return {}; }
+}
+
+const redactUrl = (value,max=500) => typeof value==='string'
+  ? value.replace(/[\u0000-\u001f\u007f-\u009f<>]/g,' ').replace(/(?:https?:\/\/|www\.)\S+/gi,'').replace(/\s+/g,' ').trim().slice(0,max)
+  : '';
+
+function matchRetellProgram(retellData,programs) {
+  if (!retellData || !Array.isArray(programs) || !programs.length) return null;
+  const rawSlug = typeof retellData.programSlug==='string' ? retellData.programSlug.trim().toLowerCase() : '';
+  if (rawSlug) {
+    const exact = programs.find(p=>p.slug===rawSlug);
+    if (exact) return exact;
+    const normSlug = normalized(rawSlug).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+    const byNorm = programs.find(p=>p.slug===normSlug);
+    if (byNorm) return byNorm;
+  }
+  const interest = typeof retellData.programInterest==='string' ? retellData.programInterest.trim() : '';
+  if (!interest) return null;
+  const normInterest = normalized(interest);
+  const direct = programs.find(p=>{
+    const title = normalized(p.title), shortTitle = normalized(p.shortTitle);
+    return normInterest===title || normInterest===shortTitle || normInterest===p.slug ||
+      (normInterest.length>=8 && (title.includes(normInterest) || shortTitle.includes(normInterest)));
+  });
+  if (direct) return direct;
+  const ranked = matches(interest,programs);
+  if (!ranked.length) return null;
+  const words = normInterest.split(/[^a-z0-9]+/).filter(w=>w.length>2 || w==='ia');
+  const topText = normalized(ranked[0].title+' '+ranked[0].shortTitle);
+  const hasTitleWord = words.some(w=>topText.includes(w) || (w==='mba' && topText.includes('administracion de empresas')));
+  return hasTitleWord ? ranked[0] : null;
+}
+
+function retellContextFrom(retellData) {
+  if (!retellData) return {};
+  const ctx = {};
+  if (retellData.city) ctx.city = redactUrl(retellData.city,120);
+  if (retellData.modality) ctx.modality = redactUrl(retellData.modality,80);
+  if (retellData.horizon) ctx.horizon = redactUrl(retellData.horizon,120);
+  if (retellData.academicBackground) ctx.academicBackground = redactUrl(retellData.academicBackground,240);
+  if (retellData.keyQuestions) ctx.keyQuestions = redactUrl(retellData.keyQuestions,500);
+  if (retellData.obstacles) ctx.obstacles = redactUrl(retellData.obstacles,300);
+  if (retellData.programInterest) ctx.programInterest = redactUrl(retellData.programInterest,200);
+  ctx.emailConfirmed = Boolean(retellData.emailConfirmed);
+  ctx.phoneConfirmed = Boolean(retellData.phoneConfirmed);
+  if (retellData.summary) ctx.callSummary = redactUrl(retellData.summary,1200);
+  return ctx;
+}
+
+function retellEventDescription(facts,retellData,programs) {
+  const prog = programs.find(p=>p.slug===facts.program)?.title || redactUrl(retellData.programInterest,160) || 'Posgrados UCG';
+  const parts = ['Llamada Retell AI · Programa: '+prog];
+  if (retellData.city) parts.push('Ciudad: '+redactUrl(retellData.city,120));
+  if (retellData.modality) parts.push('Modalidad: '+redactUrl(retellData.modality,80));
+  if (retellData.horizon) parts.push('Inicio: '+redactUrl(retellData.horizon,120));
+  const checks = [
+    retellData.emailConfirmed ? 'correo deletreado y confirmado' : 'correo registrado',
+    retellData.phoneConfirmed ? 'teléfono confirmado por lectura' : (retellData.phone ? 'teléfono registrado' : null)
+  ].filter(Boolean);
+  parts.push('Verificación: '+checks.join(', '));
+  if (retellData.summary) parts.push('Resumen: '+redactUrl(retellData.summary,600));
+  return parts.join(' · ').slice(0,1200)+'.';
 }
 
 function view(r) {
@@ -85,18 +147,24 @@ function linkEvent(db,id,actor) {
 }
 
 function newLeadStatements(db,selected,contact,facts,details,gate,args) {
-  const {date,occurred,kind} = details;
+  const {date,occurred,kind,provider,retellData} = details;
   const {email,phone,name} = contact;
   const id = selected.leadId;
   const address = email || opaquePhoneIdentity(id);
-  const source = kind==='email' ? 'Correo entrante' : 'Llamada entrante';
+  const isRetellRich = provider==='retell' && !!retellData && !!email;
+  const source = isRetellRich ? 'Llamada Retell' : kind==='email' ? 'Correo entrante' : 'Llamada entrante';
+  const consentEmail = isRetellRich && retellData.consentEmail!==false ? 1 : 0;
+  const contextJson = isRetellRich ? JSON.stringify(retellContextFrom(retellData)) : '{}';
+  const score = isRetellRich
+    ? (facts.confidence==='alta' && retellData.emailConfirmed && retellData.phoneConfirmed ? 85 : 70)
+    : (facts.confidence==='alta'?65:40);
   const pref = crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
   const sql = [
-    stmt(db,`INSERT INTO leads(id,name,email,phone,program,source,next_action,due_at,created_at,updated_at,pref_token,score)
-      SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ${gate}
+    stmt(db,`INSERT INTO leads(id,name,email,phone,program,source,next_action,due_at,created_at,updated_at,pref_token,score,context,consent_email)
+      SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ${gate}
       AND (?='' OR NOT EXISTS(SELECT 1 FROM leads WHERE phone=?))
       ON CONFLICT(email) DO NOTHING`,id,name || (kind==='email'?'Aspirante por correo':'Aspirante por teléfono'),address,
-    phone,facts.program || '',source,intakeStep,inHours(4),occurred,date,pref, facts.confidence==='alta'?65:40,...args,phone,phone)
+    phone,facts.program || '',source,intakeStep,inHours(4),occurred,date,pref,score,contextJson,consentEmail,...args,phone,phone)
   ];
   if (!email) sql.push(stmt(db,`INSERT INTO admissions_phone_identities(lead_id,phone,created_at)
     SELECT id,phone,? FROM leads WHERE id=? ON CONFLICT(lead_id) DO NOTHING`,date,id));
@@ -133,13 +201,43 @@ async function storeConversation(env,input,contact,analysis,eventId) {
       : 'NOT EXISTS (SELECT 1 FROM admissions_conversations WHERE provider=? AND event_id=?)';
     const gateArgs = previous ? [...args,previous.revision] : args;
     const sql = [];
-    if (selected.create) sql.push(...newLeadStatements(db,selected,contact,facts,{date,occurred,kind},gate,gateArgs));
+    const isRetellRich = provider==='retell' && !!input.retellData && !!contact.email && !contact.forceReview && !immutableReview;
+    if (selected.create) sql.push(...newLeadStatements(db,selected,contact,facts,{date,occurred,kind,provider,retellData:input.retellData},gate,gateArgs));
+    const known = selected.known;
+    const upgradeName = isRetellRich && contact.name && (!known?.name || known.name==='Aspirante por teléfono' || known.name==='Aspirante por correo') ? contact.name : null;
+    const upgradePhone = isRetellRich && contact.phone && known && !known.phone ? contact.phone : null;
+    const upgradeProgram = isRetellRich && facts.program && known && !known.program ? facts.program : null;
+    const upgradeContext = isRetellRich && known ? JSON.stringify({...extracted(known.context || '{}'),...retellContextFrom(input.retellData)}) : null;
+    const grantEmailConsent = Number(isRetellRich && input.retellData.consentEmail!==false);
     if (selected.upgradeEmail) {
-      sql.push(stmt(db,`UPDATE leads SET email=?,updated_at=?,revision=revision+1
+      sql.push(stmt(db,`UPDATE leads SET email=?,
+        name=CASE WHEN ? IS NOT NULL AND name IN ('','Aspirante por teléfono','Aspirante por correo') THEN ? ELSE name END,
+        phone=CASE WHEN ? IS NOT NULL AND phone='' AND NOT EXISTS(SELECT 1 FROM leads other WHERE other.phone=? AND other.id<>leads.id) THEN ? ELSE phone END,
+        program=CASE WHEN ? IS NOT NULL AND program='' THEN ? ELSE program END,
+        source=CASE WHEN ?=1 AND source IN ('Llamada entrante','Correo entrante') THEN 'Llamada Retell' ELSE source END,
+        context=COALESCE(?,context),
+        consent_email=CASE WHEN ?=1 AND NOT EXISTS(SELECT 1 FROM events e WHERE e.lead_id=leads.id AND e.type='preferencias' AND e.description LIKE '%retiró%correo%') THEN 1 ELSE consent_email END,
+        paused=CASE WHEN ?=1 AND NOT EXISTS(SELECT 1 FROM events e WHERE e.lead_id=leads.id AND e.type='seguimiento' AND e.description LIKE '%pausó%' AND e.actor NOT IN ('Sistema','Agente de conversaciones')) THEN 0 ELSE paused END,
+        updated_at=?,revision=revision+1
         WHERE id=? AND email=? AND phone=? AND NOT EXISTS(SELECT 1 FROM leads WHERE email=?) AND ${gate}`,
-      selected.upgradeEmail,date,selected.leadId,opaquePhoneIdentity(selected.leadId),contact.phone,selected.upgradeEmail,...gateArgs));
+      selected.upgradeEmail,upgradeName,upgradeName,upgradePhone,upgradePhone,upgradePhone,upgradeProgram,upgradeProgram,
+      Number(isRetellRich),upgradeContext,grantEmailConsent,grantEmailConsent,date,selected.leadId,opaquePhoneIdentity(selected.leadId),contact.phone,selected.upgradeEmail,...gateArgs));
       sql.push(stmt(db,`DELETE FROM admissions_phone_identities WHERE lead_id=?
         AND EXISTS(SELECT 1 FROM leads WHERE id=? AND email=?) AND ${gate}`,selected.leadId,selected.leadId,selected.upgradeEmail,...gateArgs));
+    } else if (selected.leadId && isRetellRich && known) {
+      const wasGeneric = isPhoneIdentity(known.email) || !known.name || known.name==='Aspirante por teléfono' || known.name==='Aspirante por correo';
+      sql.push(stmt(db,`UPDATE leads SET
+        name=CASE WHEN ? IS NOT NULL AND name IN ('','Aspirante por teléfono','Aspirante por correo') THEN ? ELSE name END,
+        phone=CASE WHEN ? IS NOT NULL AND phone='' AND NOT EXISTS(SELECT 1 FROM leads other WHERE other.phone=? AND other.id<>leads.id) THEN ? ELSE phone END,
+        program=CASE WHEN ? IS NOT NULL AND program='' THEN ? ELSE program END,
+        source=CASE WHEN source IN ('Llamada entrante','Correo entrante') THEN 'Llamada Retell' ELSE source END,
+        context=COALESCE(?,context),
+        consent_email=CASE WHEN ?=1 AND NOT EXISTS(SELECT 1 FROM events e WHERE e.lead_id=leads.id AND e.type='preferencias' AND e.description LIKE '%retiró%correo%') THEN 1 ELSE consent_email END,
+        paused=CASE WHEN ?=1 AND ?=1 AND NOT EXISTS(SELECT 1 FROM events e WHERE e.lead_id=leads.id AND e.type='seguimiento' AND e.description LIKE '%pausó%' AND e.actor NOT IN ('Sistema','Agente de conversaciones')) THEN 0 ELSE paused END,
+        updated_at=?,revision=revision+1
+        WHERE id=? AND ${gate}`,
+      upgradeName,upgradeName,upgradePhone,upgradePhone,upgradePhone,upgradeProgram,upgradeProgram,
+      upgradeContext,grantEmailConsent,Number(wasGeneric),grantEmailConsent,date,selected.leadId,...gateArgs));
     }
     const leadId = selected.leadId || null, rowId = previous?.id || id;
     const exists = `(? IS NULL OR EXISTS(SELECT 1 FROM leads WHERE id=? AND (?='' OR email=?)))`;
@@ -171,6 +269,12 @@ async function storeConversation(env,input,contact,analysis,eventId) {
       trustedDirect,createdLead,occurred,date,date,...linkGate));
     }
     sql.push(linkEvent(db,rowId,kind==='email'?'Correo':'Voz'));
+    if (isRetellRich && leadId) {
+      sql.push(stmt(db,`INSERT INTO events(id,lead_id,type,description,created_at,actor)
+        SELECT 'retell:'||id,lead_id,'llamada',?,occurred_at,'Retell AI'
+        FROM admissions_conversations WHERE id=? AND lead_id IS NOT NULL
+        ON CONFLICT(id) DO NOTHING`,retellEventDescription(facts,input.retellData,catalog),rowId));
+    }
     sql.push(stmt(db,'SELECT * FROM admissions_conversations WHERE provider=? AND event_id=?',...args));
     const results = await db.batch(sql);
     const row = results.at(-1).results[0];
@@ -193,6 +297,41 @@ export async function ingestConversation(env,input) {
   };
   const eventId = await digest(input.eventId);
   const analysis = extractConversationFacts(input,catalog);
+  if (input.provider==='retell' && input.retellData && !contact.forceReview) {
+    const retell = input.retellData;
+    const matched = matchRetellProgram(retell,catalog) || (analysis.program ? catalog.find(p=>p.slug===analysis.program) : null);
+    if (matched) {
+      analysis.program = matched.slug;
+      analysis.programTitle = matched.title;
+    }
+    if (retell.horizon && !analysis.timeframe) analysis.timeframe = redactUrl(retell.horizon,120);
+    if (retell.obstacles && !analysis.obstacle) analysis.obstacle = redactUrl(retell.obstacles,140);
+    analysis.retellData = {
+      summary:redactUrl(retell.summary,1200),
+      city:redactUrl(retell.city,120),
+      modality:redactUrl(retell.modality,80),
+      horizon:redactUrl(retell.horizon,120),
+      applicantName:contact.name || redactUrl(retell.name,120),
+      confirmedEmail:contact.email,
+      confirmedPhone:contact.phone,
+      programInterest:redactUrl(retell.programInterest,200),
+      academicBackground:redactUrl(retell.academicBackground,240),
+      keyQuestions:redactUrl(retell.keyQuestions,500),
+      obstacles:redactUrl(retell.obstacles,300),
+      emailConfirmed:Boolean(retell.emailConfirmed),
+      phoneConfirmed:Boolean(retell.phoneConfirmed),
+      consentEmail:retell.consentEmail!==false && Boolean(contact.email)
+    };
+    if (!['baja','postergar'].includes(analysis.intent) && analysis.intent==='desconocido') {
+      analysis.intent = 'programa';
+    }
+    if (contact.email && retell.consentEmail!==false && !['baja','postergar'].includes(analysis.intent)) {
+      analysis.contactPreference = 'email';
+      analysis.retellRecap = true;
+      analysis.confidence = 'alta';
+      analysis.needsReview = false;
+    }
+  }
   let {row,duplicate} = await storeConversation(env,input,contact,analysis,eventId);
   // Claim a single optional annotation only after persistence. Retries and concurrent
   // deliveries never make another model request, including after a timeout.
