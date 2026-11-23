@@ -7,7 +7,7 @@
 //   node render.mjs --fps 30 --out build/x.mp4
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { once } from 'node:events';
@@ -57,8 +57,10 @@ for (const clip of manifest) {
 
 const browser = await chromium.launch({ executablePath: EXECUTABLE, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
-await page.addInitScript(({ d, t }) => { window.__clipDurations = d; window.__clipTrims = t; },
-  { d: clipDurations, t: clipTrims });
+const narrationFile = path.join(build, 'narration.json');
+const narration = existsSync(narrationFile) ? JSON.parse(readFileSync(narrationFile, 'utf8')) : {};
+await page.addInitScript(({ d, t, n }) => { window.__clipDurations = d; window.__clipTrims = t; window.__narration = n; },
+  { d: clipDurations, t: clipTrims, n: narration });
 page.on('pageerror', e => console.error('page error:', e.message));
 await page.goto(pathToFileURL(path.join(here, 'index.html')).href + '?render=1', { waitUntil: 'load' });
 await page.waitForFunction(() => window.__ready === true, null, { timeout: 180000 });
@@ -66,7 +68,8 @@ await page.waitForFunction(() => window.__ready === true, null, { timeout: 18000
 const total = await page.evaluate(() => window.__duration);
 console.log(`timeline ${total.toFixed(2)}s`);
 const scenes = await page.evaluate(() => window.__scenes);
-console.log(JSON.stringify(scenes.map(s => `${s.type}${s.clip ? ':' + s.clip : ''} ${s.start}-${s.end}`), null, 0));
+writeFileSync(path.join(build, 'timeline.json'), JSON.stringify({ total, scenes }, null, 2));
+console.log(scenes.map(s => `${s.id} ${s.start}-${s.end}${s.rate ? ' @' + s.rate + 'x' : ''}`).join(' | '));
 
 if (stillAt !== null) {
   mkdirSync(build, { recursive: true });

@@ -1,12 +1,16 @@
 /*
- * Motion-graphic product demo. One GSAP master timeline drives every scene, so any
- * frame can be rendered deterministically (render.mjs seeks to each frame time).
- * Recorded clips from capture.mjs play inside a browser frame at RATE speed.
+ * "Casa Grande Student Acquisition Engine" product film.
+ * One GSAP master timeline drives every scene, plus per-frame updaters (counters, call
+ * waveform, flywheel runner), so render.mjs can render any frame deterministically.
+ * Scene lengths stretch to fit their narration (build/narration.json via render.mjs).
  */
 (() => {
-  const RATE = 1.3;   // recordings are played slightly faster than real time
-  const TRIM = 0.25;  // default preroll skipped at the start of a recording (render.mjs measures each one)
-  const TAIL = 0.35;  // safety margin before a recording's last frame
+  const MAX_RATE = 1.3;   // fastest playback of a recording
+  const MIN_RATE = 0.8;   // slowest playback when narration needs more room
+  const TRIM = 0.25;      // default preroll skipped at the start of a recording
+  const TAIL = 0.35;      // safety margin before a recording's last frame
+  const LEAD = 0.55;      // narration starts this long after a scene begins
+  const PAD_END = 0.8;    // breathing room after a line ends
 
   const params = new URLSearchParams(location.search);
   const renderMode = params.get('render') === '1';
@@ -14,6 +18,7 @@
   const scenesEl = document.getElementById('scenes');
   const durations = window.__clipDurations || {};
   const trims = window.__clipTrims || {};
+  const narration = window.__narration || {};
   const $ = (sel, root = document) => root.querySelector(sel);
   const make = (tag, cls, html) => {
     const node = document.createElement(tag);
@@ -24,322 +29,366 @@
 
   const master = gsap.timeline({ paused: true });
   const clips = [];
-  const scenes = [];
+  const updaters = [];
 
-  const clipLength = name => Math.max(2, (durations[name] || 10) - (trims[name] ?? TRIM) - TAIL) / RATE;
+  const ICON = {
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+    portal: '<rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
+    phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
+    crm: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 4.6a3.5 3.5 0 0 1 0 6.8M21 20a6 6 0 0 0-4-5.6"/>',
+    chart: '<path d="M4 20V11M10 20V5M16 20v-6M22 20H2"/>',
+    doc: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
+    check: '<path d="M4 12l5 5L20 6"/>',
+  };
+  const icon = name => `<svg viewBox="0 0 24 24">${ICON[name]}</svg>`;
 
   function showDuring(node, start, end) {
     master.set(node, { autoAlpha: 1 }, start);
     master.set(node, { autoAlpha: 0 }, end);
   }
 
-  // Orange wipe centred on a scene boundary; the cut happens while the wipe covers the frame.
   function wipeAt(boundary) {
     const w = $('#wipe');
-    master.fromTo(w, { xPercent: -100, autoAlpha: 1 }, { xPercent: 0, duration: 0.36, ease: 'power3.in', immediateRender: false }, boundary - 0.36)
-      .fromTo(w, { xPercent: 0 }, { xPercent: 100, duration: 0.4, ease: 'power3.out', immediateRender: false }, boundary)
-      .set(w, { autoAlpha: 0 }, boundary + 0.4);
+    master.fromTo(w, { xPercent: -100, autoAlpha: 1 }, { xPercent: 0, duration: 0.34, ease: 'power3.in', immediateRender: false }, boundary - 0.34)
+      .fromTo(w, { xPercent: 0 }, { xPercent: 100, duration: 0.42, ease: 'power3.out', immediateRender: false }, boundary)
+      .set(w, { autoAlpha: 0 }, boundary + 0.42);
   }
 
-  // Split headline words so they can rise in one by one (HTML tags pass through untouched).
   function kinetic(container, html, at, size) {
     const title = make('h2', 'title', html.replace(/(<[^>]+>)|([^\s<>]+)/g, (m, tag, word) => tag ? tag : `<span class="w">${word}</span>`));
     title.style.fontSize = size;
     container.appendChild(title);
-    master.from(title.querySelectorAll('.w'), { yPercent: 115, autoAlpha: 0, duration: 0.9, ease: 'power4.out', stagger: 0.07 }, at);
+    master.from(title.querySelectorAll('.w'), { yPercent: 115, autoAlpha: 0, duration: 0.9, ease: 'power4.out', stagger: 0.06 }, at);
     return title;
   }
 
-  function sceneBox(start, end) {
+  function sceneBox(item) {
     const node = make('section', 'scene');
     scenesEl.appendChild(node);
-    showDuring(node, start, end);
-    scenes.push(node);
+    showDuring(node, item.start, item.end);
     return node;
   }
 
-  // Recording inside a browser frame, with a chapter chip and a lower-third caption.
+  // Deterministic count-up driven by the frame time.
+  function counter(el, to, at, dur = 1.4, fmt = v => Math.round(v).toLocaleString('en-US')) {
+    updaters.push(t => {
+      const k = Math.max(0, Math.min(1, (t - at) / dur));
+      el.textContent = fmt(to * (1 - Math.pow(1 - k, 3)));
+    });
+  }
+
+  // ---------- Scenes ----------
+
+  function hookScene(item) {
+    const node = sceneBox(item);
+    const wrap = make('div', 'center');
+    node.appendChild(wrap);
+    kinetic(wrap, 'A future student<br>has <em>questions.</em>', item.start + 0.25, '150px').style.textAlign = 'center';
+    const sub = make('p', 'sub', 'The first to answer them well wins the conversation.');
+    sub.style.cssText = 'text-align:center;margin:60px auto 0;font:500 44px/1.3 "Space Grotesk",sans-serif;color:#fff;';
+    wrap.appendChild(sub);
+    master.from(sub, { autoAlpha: 0, y: 26, duration: 0.9, ease: 'power3.out' }, item.start + LEAD + 2.6);
+  }
+
+  function titleScene(item) {
+    const node = sceneBox(item);
+    const kick = make('div', 'kicker', 'Introducing');
+    kick.style.cssText = 'position:absolute;left:160px;top:170px;';
+    node.appendChild(kick);
+    master.from(kick, { autoAlpha: 0, x: -20, duration: 0.6 }, item.start + 0.2);
+    const t = kinetic(node, 'Casa Grande Student<br>Acquisition <em>Engine.</em>', item.start + 0.35, '128px');
+    t.style.cssText += ';position:absolute;left:160px;top:215px;';
+    const grid = make('div', 'pillars');
+    const pillars = [
+      ['portal', 'Portal', '34 programs, instant search and filters'],
+      ['phone', 'AI Admissions Officer', 'Phone line in Ecuadorian Spanish'],
+      ['crm', 'Admissions CRM', 'Six-stage pipeline and follow-up'],
+      ['chart', 'SEO Analysis', 'Search demand across Ecuador'],
+      ['doc', 'Content Engine', 'Guides drafted from real demand'],
+    ];
+    pillars.forEach(([ic, h, p], i) => {
+      const el = make('div', 'pillar', `<div class="ic">${icon(ic)}</div><h3>${h}</h3><p>${p}</p>`);
+      grid.appendChild(el);
+      master.fromTo(el, { autoAlpha: 0, y: 50, rotationX: -25 }, { autoAlpha: 1, y: 0, rotationX: 0, duration: 0.8, ease: 'power3.out' }, item.start + 2.3 + i * 0.4);
+    });
+    grid.style.perspective = '1200px';
+    node.appendChild(grid);
+  }
+
+  function sectionScene(item) {
+    const node = sceneBox(item);
+    const num = make('div', 'sec-num', item.num);
+    const word = make('div', 'sec-word');
+    const line = make('div', 'sec-line');
+    const sub = make('div', 'sec-sub', item.sub);
+    node.append(num, word, line, sub);
+    kinetic(word, item.word, item.start + 0.15, '190px');
+    master.fromTo(num, { autoAlpha: 0, x: -90 }, { autoAlpha: 1, x: 0, duration: 0.9, ease: 'power3.out' }, item.start + 0.05)
+      .fromTo(line, { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: 'power3.inOut' }, item.start + 0.45)
+      .fromTo(sub, { autoAlpha: 0, y: 16 }, { autoAlpha: 1, y: 0, duration: 0.6, ease: 'power2.out' }, item.start + 0.8)
+      .to(num, { x: 40, duration: item.dur, ease: 'none' }, item.start + 0.95);
+  }
+
   function clipScene(item) {
-    const { start, end, dur } = item;
-    const node = sceneBox(start, end);
+    const node = sceneBox(item);
+    const cam = make('div', 'cam');
     const win = make('div', 'browser');
-    win.innerHTML = `<div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>posgrados</b> ${item.route}</div></div>`;
+    win.innerHTML = `<div class="bar"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>${item.host}</b>${item.route}</div></div>`;
     const screen = make('div', 'screen');
     const video = make('video');
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
     video.src = `build/clips/${item.clip}.webm`;
-    screen.appendChild(video);
+    const sheen = make('div', 'sheen');
+    screen.append(video, sheen);
     win.appendChild(screen);
-    const chip = make('div', 'chip', (item.num ? `<b>${item.num}</b>` : '') + item.chip);
+    cam.appendChild(win);
+    const chip = make('div', 'chip', `<b>${item.tag}</b>${item.chip}`);
     const caption = make('p', 'caption', item.caption);
-    node.append(win, chip, caption);
-    clips.push({ video, start, dur, raw: trims[item.clip] ?? TRIM });
+    node.append(cam, chip, caption);
+    clips.push({ video, start: item.start, dur: item.dur, raw: item.trim, rate: item.rate });
 
-    const sub = gsap.timeline();
-    sub.fromTo(win, { y: 56, scale: 0.955, autoAlpha: 0 }, { y: 0, scale: 1, autoAlpha: 1, duration: 0.8, ease: 'power3.out' }, 0)
-      .fromTo(chip, { x: -30, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.5, ease: 'power2.out' }, 0.3)
-      .fromTo(caption, { y: 26, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.6, ease: 'power2.out' }, 0.5)
-      .to(win, { scale: 1.022, duration: Math.max(0.1, dur - 0.8), ease: 'none' }, 0.8);
-    master.add(sub, start);
+    const s = item.start;
+    master.fromTo(win, { y: 70, z: -260, rotationY: item.tilt || -12, rotationX: 7, autoAlpha: 0 },
+      { y: 0, z: 0, rotationY: 0, rotationX: 0, autoAlpha: 1, duration: 1.1, ease: 'power3.out' }, s)
+      .fromTo(sheen, { xPercent: -120 }, { xPercent: 120, duration: 1.3, ease: 'power2.inOut' }, s + 0.6)
+      .fromTo(chip, { x: -30, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.5, ease: 'power2.out' }, s + 0.35)
+      .fromTo(caption, { y: 26, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.6, ease: 'power2.out' }, s + 0.55)
+      .to(win, { scale: 1.025, rotationY: (item.tilt || -12) > 0 ? -1.5 : 1.5, duration: Math.max(0.1, item.dur - 1.1), ease: 'none' }, s + 1.1);
+
+    if (item.stats) {
+      const box = make('div', 'stats');
+      item.stats.forEach(([n, l, fmt], i) => {
+        const el = make('div', 'stat', `<div class="n">0</div><div class="l">${l}</div>`);
+        box.appendChild(el);
+        const at = s + 1.6 + i * 0.55;
+        master.fromTo(el, { autoAlpha: 0, x: 60 }, { autoAlpha: 1, x: 0, duration: 0.7, ease: 'back.out(1.6)' }, at);
+        counter($('.n', el), n, at, 1.3, fmt);
+      });
+      node.appendChild(box);
+    }
   }
 
-  function hookScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const wrap = make('div', 'center');
-    node.appendChild(wrap);
-    const title = kinetic(wrap, 'Un aspirante decide<br><em>en minutos.</em>', start + 0.2, '168px');
-    title.style.textAlign = 'center';
-    const q = make('p', 'sub', '¿Tu institución responde a tiempo?');
-    q.style.cssText = 'text-align:center;margin:56px auto 0;font-size:44px;color:#fff;font-family:"Space Grotesk",sans-serif;font-weight:500;';
-    wrap.appendChild(q);
-    master.from(q, { autoAlpha: 0, y: 24, duration: 0.8, ease: 'power3.out' }, start + 2.6);
-  }
+  function callScene(item) {
+    const node = sceneBox(item);
+    const s = item.start;
+    const n0 = s + LEAD;
+    const phone = make('div', 'phone', `<div class="notch"></div>
+      <div class="call-head"><div class="avatar">A</div><div class="call-name">Andrea</div>
+      <div class="call-role">Oficial de Admisiones IA · Posgrados UCG</div><div class="call-timer">00:00</div></div>
+      <div class="wave">${'<i></i>'.repeat(22)}</div><div class="transcript"></div>`);
+    node.appendChild(phone);
+    master.fromTo(phone, { autoAlpha: 0, y: 80, rotationY: 18 }, { autoAlpha: 1, y: 0, rotationY: 0, duration: 1.0, ease: 'power3.out' }, s);
+    const timer = $('.call-timer', phone);
+    const bars = [...phone.querySelectorAll('.wave i')];
+    const callEnd = n0 + 11.6;
+    updaters.push(t => {
+      const live = t >= s && t < item.end;
+      if (!live) return;
+      const sec = Math.max(0, Math.min(t, callEnd) - s) * 11;
+      timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+      timer.style.color = t < callEnd ? '#2fa36b' : '#9aa3a1';
+      const energy = t < callEnd ? 1 : Math.max(0, 1 - (t - callEnd) * 2);
+      bars.forEach((b, i) => {
+        const v = Math.abs(Math.sin(t * 7.3 + i * 0.9) * Math.sin(t * 3.1 + i * 0.37));
+        b.style.height = (8 + 50 * v * energy) + 'px';
+      });
+    });
 
-  function journeyScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const head = make('div', 'kicker', 'Recorrido del aspirante');
-    head.style.cssText = 'position:absolute;left:230px;top:120px;';
-    const title = kinetic(node, 'Del primer clic a la <em>matrícula.</em>', start + 0.1, '96px');
-    title.style.cssText = 'position:absolute;left:230px;top:160px;';
-    node.append(head);
-    const track = make('div', 'path');
-    const fill = make('div', 'fill');
-    track.appendChild(fill);
-    node.appendChild(track);
-    const stations = [
-      ['Descubre', 'Fichas con fuentes oficiales'],
-      ['Compara', 'Hasta tres programas'],
-      ['Decide', 'Orientación y dudas'],
-      ['Planifica', 'Cuota con tu cotización'],
-      ['Conversa', 'Admisiones y una cita'],
-      ['Matricúlate', 'Con seguimiento hasta el final'],
+    const transcript = $('.transcript', phone);
+    const lines = [
+      ['agent', '¡Hola! Le saluda Andrea, Oficial de Admisiones de Posgrados de la UCG.', 'Hi! This is Andrea, UCG graduate admissions.', 0.4],
+      ['user', 'Me interesa la maestría en Inteligencia Artificial.', 'I’m interested in the AI master’s.', 2.6],
+      ['agent', 'Con gusto. ¿Me deletrea su correo, por favor?', 'Of course. Could you spell your email?', 4.2],
+      ['user', 'd-i-e-g-o punto s-a-l-a-z-a-r, arroba example punto com', '', 5.8],
+      ['agent', 'Confirmo: diego.salazar@example.com. ¿Es correcto?', 'Let me confirm it back to you.', 7.4],
     ];
-    const xs = stations.map((_, i) => 230 + i * (1460 / (stations.length - 1)));
-    const nodes = stations.map(([label, sub], i) => {
-      const s = make('div', 'station');
-      s.style.left = xs[i] + 'px';
-      s.innerHTML = `<div class="dot">${String(i + 1).padStart(2, '0')}</div><div class="lbl">${label}</div><div class="sm">${sub}</div>`;
-      node.appendChild(s);
-      return s;
+    lines.forEach(([who, es, en, at]) => {
+      const b = make('div', `bubble ${who}`, es + (en ? `<small>${en}</small>` : ''));
+      transcript.appendChild(b);
+      master.fromTo(b, { autoAlpha: 0, y: 18, scale: 0.96 }, { autoAlpha: 1, y: 0, scale: 1, duration: 0.45, ease: 'back.out(1.8)' }, n0 + at);
+    });
+
+    const cap = make('div', 'capture', `<div class="kicker">Captured during the call</div><h2 class="title" style="font-size:58px">17 data points, <em>structured.</em></h2>`);
+    const checks = [
+      ['Name', '', 2.2],
+      ['Email spelled back and confirmed', '✓ Deletreado', 4.4],
+      ['Phone read back digit by digit', '✓ Tel. confirmado', 6.2],
+      ['Program of interest', '', 8.4],
+      ['City · modality · start horizon', '', 9.3],
+      ['Key questions and obstacles', '', 10.2],
+      ['Recap-email consent · advisor callback', '', 11.1],
+    ];
+    checks.forEach(([label, tag, at]) => {
+      const row = make('div', 'check', `<div class="box">${icon('check')}</div><div>${label}</div>${tag ? `<span class="t">${tag}</span>` : ''}`);
+      cap.appendChild(row);
+      master.fromTo(row, { autoAlpha: 0, x: 40 }, { autoAlpha: 1, x: 0, duration: 0.5, ease: 'power2.out' }, n0 + at - 0.6);
+      master.set(row, { className: 'check on' }, n0 + at);
+      master.fromTo(row.querySelector('.box'), { scale: 0.6 }, { scale: 1, duration: 0.35, ease: 'back.out(3)' }, n0 + at);
+    });
+    node.appendChild(cap);
+    master.from(cap.querySelector('.kicker'), { autoAlpha: 0, duration: 0.5 }, s + 0.6);
+    master.from(cap.querySelector('h2'), { autoAlpha: 0, y: 24, duration: 0.7, ease: 'power3.out' }, s + 0.7);
+
+    const arrow = make('div', 'arrow', 'Lands in the CRM →');
+    arrow.style.cssText += ';left:790px;top:905px;';
+    const card = make('div', 'leadcard', `<div class="top"><div class="nm">Diego Salazar Andrade</div><div class="pts">85 pts</div></div>
+      <div class="pg">Inteligencia Artificial y Analítica de Datos</div>
+      <div class="tags"><span class="tag">Llamada Retell</span><span class="tag ok">✓ Deletreado</span><span class="tag ok">✓ Tel. confirmado</span></div>
+      <div class="stage">Etapa · Nuevo</div>`);
+    card.style.cssText += ';left:1210px;top:780px;';
+    node.append(arrow, card);
+    master.fromTo(arrow, { autoAlpha: 0, x: -20 }, { autoAlpha: 1, x: 0, duration: 0.5 }, callEnd + 0.1)
+      .fromTo(card, { autoAlpha: 0, x: 120, rotation: 4 }, { autoAlpha: 1, x: 0, rotation: 0, duration: 0.8, ease: 'back.out(1.4)' }, callEnd + 0.3)
+      .to(cap, { y: -110, duration: 0.8, ease: 'power2.inOut' }, callEnd);
+
+    const flag = make('div', 'flag', 'Illustrative call with a fictitious applicant. The live agent speaks Ecuadorian Spanish.');
+    node.appendChild(flag);
+    master.from(flag, { autoAlpha: 0, duration: 0.6 }, s + 1.0);
+  }
+
+  function flywheelScene(item) {
+    const node = sceneBox(item);
+    const cx = 960, cy = 560, r = 330;
+    const C = 2 * Math.PI * r;
+    const svg = `<svg class="wheel" viewBox="0 0 1920 1080"><defs><linearGradient id="wheelGrad" x1="0" x2="1"><stop offset="0" stop-color="#ff8300"/><stop offset="1" stop-color="#ffb35c"/></linearGradient></defs>
+      <circle class="ring" cx="${cx}" cy="${cy}" r="${r}"/><circle class="ring-fill" cx="${cx}" cy="${cy}" r="${r}" stroke-dasharray="${C}" stroke-dashoffset="${C}" transform="rotate(-90 ${cx} ${cy})"/></svg>`;
+    node.insertAdjacentHTML('beforeend', svg);
+    const fill = node.querySelector('.ring-fill');
+    master.fromTo(fill, { attr: { 'stroke-dashoffset': C } }, { attr: { 'stroke-dashoffset': 0 }, duration: 2.2, ease: 'power2.inOut' }, item.start + 0.3);
+    const hub = make('div', 'hub', '<div class="k">The engine</div><div class="h">One connected <span style="color:#ff8300">loop.</span></div>');
+    node.appendChild(hub);
+    master.from(hub, { autoAlpha: 0, scale: 0.9, duration: 0.8, ease: 'power3.out' }, item.start + 0.5);
+    const nodes = [
+      ['chart', 'Search demand', 'SEO Analysis · Ecuador'],
+      ['portal', 'Portal', '34 programs · web form'],
+      ['phone', 'AI admissions officer', 'Verified phone inquiries'],
+      ['crm', 'Admissions CRM', 'Six stages · follow-up'],
+      ['doc', 'Content Engine', 'Guides from real demand'],
+    ];
+    const els = nodes.map(([ic, lb, sm], i) => {
+      const a = (-90 + i * 72) * Math.PI / 180;
+      const el = make('div', 'node', `<div class="dot">${icon(ic)}</div><div class="lb">${lb}</div><div class="sm">${sm}</div>`);
+      el.style.left = (cx + r * Math.cos(a)) + 'px';
+      el.style.top = (cy + r * Math.sin(a) - 46) + 'px';
+      node.appendChild(el);
+      master.fromTo(el, { autoAlpha: 0, scale: 0.5 }, { autoAlpha: 1, scale: 1, duration: 0.55, ease: 'back.out(2)' }, item.start + 0.4 + i * 0.38);
+      return el;
     });
     const runner = make('div', 'runner');
     node.appendChild(runner);
-    const note = make('p', 'sub', 'Admisiones acompaña a cada aspirante hasta su matrícula.');
-    note.style.cssText = 'position:absolute;left:0;right:0;top:760px;text-align:center;font-size:34px;';
-    node.appendChild(note);
-
-    const t0 = start + 0.7;
-    const span = 4.6;
-    master.fromTo(fill, { scaleX: 0 }, { scaleX: 1, duration: span, ease: 'power1.inOut' }, t0);
-    master.fromTo(runner, { x: xs[0] }, { x: xs[xs.length - 1], duration: span, ease: 'power1.inOut' }, t0);
-    nodes.forEach((s, i) => {
-      const at = t0 + (span * i) / (nodes.length - 1);
-      master.fromTo(s, { autoAlpha: 0, scale: 0.4 }, { autoAlpha: 1, scale: 1, duration: 0.5, ease: 'back.out(2)' }, at - 0.1);
+    const n0 = item.start + LEAD;
+    const windows = [[0, 1.2], [0.9, 2.0], [2.0, 3.8], [3.9, 5.4], [5.5, 9.5]];
+    updaters.push(t => {
+      if (t < item.start || t >= item.end) return;
+      const a = -Math.PI / 2 + (t - item.start) * 0.9;
+      runner.style.left = (cx + r * Math.cos(a)) + 'px';
+      runner.style.top = (cy + r * Math.sin(a)) + 'px';
+      runner.style.opacity = t > item.start + 2.0 ? 1 : 0;
+      els.forEach((el, i) => el.classList.toggle('hot', t - n0 >= windows[i][0] && t - n0 < windows[i][1]));
     });
-    master.from(note, { autoAlpha: 0, y: 20, duration: 0.8, ease: 'power2.out' }, start + 5.5);
-  }
-
-  function acquisitionScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const wrap = make('div', 'center');
-    node.appendChild(wrap);
-    const kick = make('div', 'kicker', 'Captación');
-    kick.style.cssText = 'text-align:center;margin-bottom:34px;';
-    wrap.appendChild(kick);
-    kinetic(wrap, 'La captación empieza <em>en la búsqueda.</em>', start + 0.4, '132px').style.textAlign = 'center';
-    const sub = make('p', 'sub', 'Un motor de contenidos convierte búsquedas reales en guías de posgrado, revisadas antes de publicarse.');
-    sub.style.cssText = 'text-align:center;margin:56px auto 0;max-width:1180px;';
-    wrap.appendChild(sub);
-    master.from(sub, { autoAlpha: 0, y: 24, duration: 0.8, ease: 'power3.out' }, start + 2.0);
-  }
-
-  function engineScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const kick = make('div', 'kicker', 'Motor de contenidos');
-    kick.style.cssText = 'position:absolute;left:150px;top:118px;';
-    node.appendChild(kick);
-    const title = kinetic(node, 'Del dato de búsqueda <em>a la guía publicada.</em>', start + 0.2, '80px');
-    title.style.cssText = 'position:absolute;left:150px;top:160px;';
-
-    const rail = make('div', 'rail');
-    node.appendChild(rail);
-    const packet = make('div', 'packet');
-    node.appendChild(packet);
-    const steps = [
-      ['01', 'Búsquedas reales', 'Search Console, OpenSEO y Semrush (opcional) miden la demanda de cada programa.'],
-      ['02', 'Oportunidades', 'Cada tema se puntúa con demanda, interés registrado en el CRM y vacíos de contenido.'],
-      ['03', 'Borrador', 'Se apoya en el catálogo institucional. El modelo de IA es opcional y nunca decide por el equipo.'],
-      ['04', 'Revisión', 'El personal revisa, edita y decide. Nada se publica sin esa revisión.'],
-      ['05', 'Publicación', 'El portal publica la guía y el CMS institucional confirma la versión con su comprobante.'],
-    ];
-    const flow = make('div', 'flow');
-    const cards = steps.map(([n, h, p]) => {
-      const c = make('div', 'node', `<div class="n">${n}</div><h3>${h}</h3><p>${p}</p>`);
-      flow.appendChild(c);
-      return c;
-    });
-    node.appendChild(flow);
-
-    const wlabel = make('div', 'lbl', '<span>Puntuación de cada oportunidad</span><span>100 puntos</span>');
-    const weights = make('div', 'weights');
-    weights.appendChild(wlabel);
-    const stack = make('div', 'stack');
-    stack.innerHTML = '<div class="seg-a">Demanda de búsqueda · 50</div><div class="seg-b">CRM · 25</div><div class="seg-c">Brecha de contenido · 25</div>';
-    weights.appendChild(stack);
-    const legend = make('div', 'legend', '<span><b>Demanda</b>: cuánto se busca cada tema.</span><span><b>CRM</b>: qué consultan ya los aspirantes.</span><span><b>Brecha</b>: qué falta publicar.</span>');
-    weights.appendChild(legend);
-    node.appendChild(weights);
-
-    const t0 = start + 0.9;
-    master.fromTo(rail, { scaleX: 0 }, { scaleX: 1, duration: 1.4, ease: 'power2.out' }, t0 - 0.3);
-    master.fromTo(packet, { x: 180 }, { x: 1740, duration: 3.6, ease: 'power1.inOut' }, t0);
-    cards.forEach((c, i) => master.fromTo(c, { autoAlpha: 0, y: 36 }, { autoAlpha: 1, y: 0, duration: 0.7, ease: 'power3.out' }, t0 + 0.2 + i * 0.5));
-    const segs = stack.children;
-    [50, 25, 25].forEach((pct, i) => {
-      segs[i].style.width = '0%';
-      master.fromTo(segs[i], { width: '0%' }, { width: pct + '%', duration: 1.1, ease: 'power3.inOut' }, start + 5.4 + i * 0.35);
-    });
-    master.from(wlabel, { autoAlpha: 0, duration: 0.6 }, start + 5.2);
-    master.from(legend, { autoAlpha: 0, y: 14, duration: 0.7 }, start + 7.4);
-  }
-
-  function agentsScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const wrap = make('div', 'center');
-    wrap.style.top = '280px';
-    wrap.style.transform = 'none';
-    node.appendChild(wrap);
-    const kick = make('div', 'kicker', 'CRM con agentes');
-    kick.style.cssText = 'text-align:center;margin-bottom:30px;';
-    wrap.appendChild(kick);
-    kinetic(wrap, 'El CRM trabaja las señales. <em>El equipo decide.</em>', start + 0.2, '96px').style.textAlign = 'center';
-    const grid = make('div', 'agents');
-    grid.style.top = '560px';
-    const agents = [
-      ['Lee', 'Del correo o de la llamada extrae el programa, la intención, el obstáculo y la frase que lo respalda.'],
-      ['Propone', 'Sugiere el siguiente paso con su fundamento, un responsable y una fecha. El equipo revisa y asume cada decisión.'],
-      ['Sigue', 'Seguimiento solo por canales permitidos: hasta dos mensajes por semana, 24 horas entre envíos y bajas respetadas.'],
-    ];
-    agents.forEach(([h, p], i) => {
-      const card = make('div', 'agent', `<div class="badge">0${i + 1}</div><h3>${h}</h3><p>${p}</p>`);
-      grid.appendChild(card);
-      master.fromTo(card, { autoAlpha: 0, y: 46 }, { autoAlpha: 1, y: 0, duration: 0.8, ease: 'power3.out' }, start + 2.2 + i * 1.1);
-    });
-    node.appendChild(grid);
-  }
-
-  function funnelScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
-    const kick = make('div', 'kicker', 'Conversión');
-    kick.style.cssText = 'position:absolute;left:0;right:0;top:118px;text-align:center;';
-    node.appendChild(kick);
-    const title = kinetic(node, 'De la ficha <em>a la matrícula.</em>', start + 0.2, '96px');
-    title.style.cssText = 'position:absolute;left:0;right:0;top:160px;text-align:center;';
-    const box = make('div', 'funnel');
-    box.style.top = '420px';
-    const stages = [
-      ['Vistas', 'Personas que abren una ficha de maestría.', 1100],
-      ['Aspirantes', 'Solicitudes deduplicadas por aspirante y programa.', 920],
-      ['Citas', 'Reservas confirmadas durante el período.', 740],
-      ['Matrículas', 'Solo con evidencia registrada en el expediente.', 560],
-    ];
-    stages.forEach(([t, d, w], i) => {
-      const s = make('div', 'step' + (i === stages.length - 1 ? ' last' : ''), `<span class="t">${t}</span><span class="d">${d}</span>`);
-      s.style.width = w + 'px';
-      box.appendChild(s);
-      master.fromTo(s, { autoAlpha: 0, x: -40 }, { autoAlpha: 1, x: 0, duration: 0.7, ease: 'power3.out' }, start + 1.0 + i * 0.6);
-    });
-    node.appendChild(box);
-    const note = make('p', 'note', 'Cada etapa se mide por separado. Esquema ilustrativo: las cifras dependen de cada institución.');
-    node.appendChild(note);
-    master.to(note, { autoAlpha: 1, duration: 0.8 }, start + 4.0);
   }
 
   function closingScene(item) {
-    const { start, end } = item;
-    const node = sceneBox(start, end);
+    const node = sceneBox(item);
     const wrap = make('div', 'center');
     node.appendChild(wrap);
     const logo = make('img', 'logo');
     logo.src = '../../public/media/ucg-logo-light.png';
     logo.alt = 'Universidad Casa Grande';
     wrap.appendChild(logo);
-    const title = kinetic(wrap, 'De la búsqueda <em>a la matrícula.</em>', start + 0.9, '110px');
-    title.style.textAlign = 'center';
-    const sub = make('p', 'sub', 'Sitio, contenidos y CRM con agentes, en una sola plataforma.');
-    sub.style.cssText = 'text-align:center;margin:44px auto 0;';
+    kinetic(wrap, 'Student Acquisition <em>Engine.</em>', item.start + 0.7, '112px').style.textAlign = 'center';
+    const sub = make('p', 'sub', 'From the first search to enrollment.');
+    sub.style.cssText = 'text-align:center;margin:40px auto 0;font-size:36px;';
     wrap.appendChild(sub);
-    const legal = make('p', 'legal', 'Demostración grabada en el portal público y en el CRM de muestra. Los datos del CRM son ficticios; las cifras de búsqueda son las del sitio al grabar. Los resultados dependen de cada institución.');
+    const legal = make('p', 'legal', 'Pilot portal. Applicants, calls and CRM records shown are fictitious and were recorded on a local copy of the platform. Search figures come from a dated OpenSEO Ecuador snapshot.');
     node.appendChild(legal);
-    master.from(logo, { autoAlpha: 0, y: 24, duration: 0.9, ease: 'power3.out' }, start + 0.1);
-    master.from(sub, { autoAlpha: 0, y: 20, duration: 0.8, ease: 'power3.out' }, start + 3.2);
-    master.from(legal, { autoAlpha: 0, duration: 0.8 }, start + 4.4);
+    master.from(logo, { autoAlpha: 0, y: 24, duration: 0.9, ease: 'power3.out' }, item.start + 0.1)
+      .from(sub, { autoAlpha: 0, y: 20, duration: 0.8, ease: 'power3.out' }, item.start + 2.2)
+      .from(legal, { autoAlpha: 0, duration: 0.8 }, item.start + 3.0);
   }
 
+  // ---------- Plan ----------
+  const host = 'ucg-posgrados';
   const plan = [
-    { type: 'hook', dur: 4.8 },
-    { type: 'journey', dur: 6.6 },
-    { type: 'clip', clip: 'home', route: '/', num: '01', chip: 'Descubre', caption: '<strong>34 maestrías</strong> en 7 áreas de estudio, cada ficha con su fuente oficial.' },
-    { type: 'clip', clip: 'catalog', route: '/programas', num: '02', chip: 'Compara', caption: 'Filtra por área y <strong>compara hasta tres programas</strong> lado a lado.' },
-    { type: 'clip', clip: 'orientation', route: '/orientacion', num: '03', chip: 'Decide', caption: 'Tres preguntas conectan el interés del aspirante con las maestrías que se ajustan a él.' },
-    { type: 'clip', clip: 'chat', route: '/financiamiento', num: '03', chip: 'Pregunta al asistente', caption: 'Responde con el catálogo oficial y <strong>dice con claridad lo que aún no está publicado</strong>.' },
-    { type: 'clip', clip: 'simulator', route: '/financiamiento', num: '04', chip: 'Planifica', caption: 'Calcula la cuota mensual con <strong>la cotización vigente</strong> de admisiones.' },
-    { type: 'clip', clip: 'request', route: '/solicitar', num: '05', chip: 'Conversa', caption: 'Cada canal pide <strong>su propio permiso</strong>. Correo, WhatsApp y llamadas son opcionales.' },
-    { type: 'acquisition', dur: 4.8 },
-    { type: 'engine', dur: 11.8 },
-    { type: 'clip', clip: 'editorial', route: '/motor-de-contenidos', chip: 'Motor de contenidos', caption: 'Un <strong>plan editorial público</strong> y guías que responden a búsquedas reales.' },
-    { type: 'agents', dur: 8.8 },
-    { type: 'clip', clip: 'crm-conversation', route: '/crm', chip: 'CRM · Lee', caption: 'Pega un correo o un resumen de llamada: el CRM extrae <strong>programa, intención, obstáculo</strong> y la frase que lo respalda.' },
-    { type: 'clip', clip: 'crm-case', route: '/crm', chip: 'CRM · Propone y sigue', caption: 'Cada expediente muestra <strong>el siguiente paso y su responsable</strong>, las tareas y la automatización activa.' },
-    { type: 'funnel', dur: 7.4 },
-    { type: 'closing', dur: 8.2 },
+    { id: 'hook', type: 'hook', dur: 6.5 },
+    { id: 'title', type: 'title', dur: 7.5 },
+    { id: 'sec-attract', type: 'section', dur: 2.8, num: '01', word: '<em>Attract.</em>', sub: 'A portal built to convert curiosity.' },
+    { id: 'portal', type: 'clip', clip: 'portal', host, route: ' / inicio', tag: 'Portal', chip: 'Attract', tilt: -12,
+      caption: '<strong>34 verified programs</strong> and a direct line to an AI admissions officer.',
+      stats: [[34, 'master’s programs'], [7, 'areas of study'], [15, 'open for enrollment now']] },
+    { id: 'catalog', type: 'clip', clip: 'catalog', host, route: ' / maestrías', tag: 'Portal', chip: 'Explore', tilt: 12,
+      caption: 'Instant search, area filters and <strong>open-enrollment status</strong> at a glance.' },
+    { id: 'sec-engage', type: 'section', dur: 2.8, num: '02', word: '<em>Engage.</em>', sub: 'Every inquiry answered and verified.' },
+    { id: 'call', type: 'call', dur: 14 },
+    { id: 'form', type: 'clip', clip: 'form', host, route: ' / solicitar', tag: 'Web', chip: 'Inquiry form', tilt: -10,
+      caption: 'One form, <strong>straight into the CRM</strong>, with consent recorded per channel.' },
+    { id: 'sec-convert', type: 'section', dur: 2.8, num: '03', word: '<em>Convert.</em>', sub: 'One pipeline from inquiry to enrollment.' },
+    { id: 'crm', type: 'clip', clip: 'crm', host, route: ' / admin / crm', tag: 'Admin', chip: 'Admissions CRM', tilt: 12,
+      caption: 'A <strong>six-stage pipeline</strong> with verification badges, lead scores and call activity.' },
+    { id: 'lead', type: 'clip', clip: 'lead', host, route: ' / admin / expediente', tag: 'Admin', chip: 'Applicant record', tilt: -12,
+      caption: 'Call intelligence, <strong>ready follow-ups</strong> and advisor callback tasks.' },
+    { id: 'sec-grow', type: 'section', dur: 2.8, num: '04', word: '<em>Grow.</em>', sub: 'Turn search demand into enrollments.' },
+    { id: 'seo', type: 'clip', clip: 'seo', host, route: ' / admin / seo', tag: 'Admin', chip: 'SEO Analysis', tilt: 12,
+      caption: '<strong>Ecuador search demand</strong>, mapped program by program, with findings tied to the data.',
+      stats: [[2610, 'monthly searches in Ecuador'], [22, 'of 34 programs with demand'], [720, 'searches for the top term']] },
+    { id: 'content', type: 'clip', clip: 'content', host, route: ' / admin / contenido', tag: 'Admin', chip: 'Content Engine', tilt: -12,
+      caption: 'Demand becomes <strong>guides</strong>: drafted from the catalog, reviewed, then published.' },
+    { id: 'flywheel', type: 'flywheel', dur: 9 },
+    { id: 'closing', type: 'closing', dur: 7.5 },
   ];
 
-  const builders = { hook: hookScene, journey: journeyScene, acquisition: acquisitionScene, engine: engineScene, agents: agentsScene, funnel: funnelScene, closing: closingScene, clip: clipScene };
+  const builders = { hook: hookScene, title: titleScene, section: sectionScene, clip: clipScene, call: callScene, flywheel: flywheelScene, closing: closingScene };
+
+  function fitDurations(item) {
+    const need = narration[item.id] ? LEAD + narration[item.id] + PAD_END : 0;
+    if (item.type !== 'clip') { item.dur = Math.max(item.dur, need); return; }
+    item.trim = trims[item.clip] ?? TRIM;
+    const usable = Math.max(2, (durations[item.clip] || 10) - item.trim - TAIL);
+    let dur = Math.max(usable / MAX_RATE, need);
+    let rate = usable / dur;
+    if (rate < MIN_RATE) { rate = MIN_RATE; dur = Math.max(usable / rate, need); }
+    item.dur = dur;
+    item.rate = Math.min(rate, usable / dur);
+  }
 
   function build() {
     let t = 0;
     plan.forEach(item => {
-      item.dur = item.type === 'clip' ? clipLength(item.clip) : item.dur;
+      fitDurations(item);
       item.start = t;
       item.end = t + item.dur;
       t = item.end;
     });
     plan.forEach(item => builders[item.type](item));
     plan.slice(0, -1).forEach(item => wipeAt(item.end));
+    master.to('.glow.a', { x: 500, y: 200, duration: t, ease: 'sine.inOut' }, 0)
+      .to('.glow.b', { x: -420, y: -160, duration: t, ease: 'sine.inOut' }, 0)
+      .to('.grid', { backgroundPosition: '0px 400px', duration: t, ease: 'none' }, 0);
     master.set({}, {}, t);
-    master.duration(t);
     window.__duration = t;
-    window.__scenes = plan.map(i => ({ type: i.type, clip: i.clip || null, start: +i.start.toFixed(2), end: +i.end.toFixed(2) }));
+    window.__scenes = plan.map(i => ({ id: i.id, type: i.type, start: +i.start.toFixed(3), end: +i.end.toFixed(3),
+      narrationStart: narration[i.id] ? +(i.start + LEAD).toFixed(3) : null, rate: i.rate ? +i.rate.toFixed(3) : null }));
   }
 
-  // Seek a recording to a time and wait until the frame is decoded.
   function seekVideo(video, time) {
     return new Promise(resolve => {
       if (Math.abs(video.currentTime - time) < 0.01 && video.readyState >= 2) return resolve();
       const timer = setTimeout(resolve, 3000);
       video.addEventListener('seeked', () => {
-        // Give the decoder a moment to present the new frame before the screenshot is taken.
         requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => { clearTimeout(timer); resolve(); }, 35)));
       }, { once: true });
       video.currentTime = time;
     });
   }
 
-  // Deterministic frame: the renderer calls this once per output frame.
   window.renderAt = async t => {
     master.seek(t, false);
+    updaters.forEach(fn => fn(t));
     for (const clip of clips) {
       if (t >= clip.start && t < clip.start + clip.dur) {
-        const raw = clip.raw + (t - clip.start) * RATE;
+        const raw = clip.raw + (t - clip.start) * clip.rate;
         const max = Number.isFinite(clip.video.duration) ? clip.video.duration - 0.05 : Infinity;
         await seekVideo(clip.video, Math.min(raw, max));
       }
@@ -347,7 +396,6 @@
     return true;
   };
 
-  const ready = [];
   function waitVideo(video) {
     return new Promise(resolve => {
       if (video.readyState >= 2) return resolve();
@@ -367,14 +415,11 @@
     build();
     fit();
     window.addEventListener('resize', fit);
-    clips.forEach(c => ready.push(waitVideo(c.video)));
+    const ready = clips.map(c => waitVideo(c.video));
     ready.push(document.fonts ? document.fonts.ready : Promise.resolve());
     const logo = $('img.logo');
     if (logo) ready.push(logo.complete ? Promise.resolve() : new Promise(r => { logo.onload = r; logo.onerror = r; }));
     await Promise.all(ready);
     window.__ready = true;
-    if (!renderMode && params.get('preview') === '1') {
-      master.play(0);
-    }
   });
 })();

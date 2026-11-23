@@ -1,97 +1,19 @@
 {
-  "voice": "ef_dora",
-  "lang": "es",
+  "voice": "af_heart",
+  "lang": "en-us",
   "speed": 1.0,
-  "lines": [
-    {
-      "start": 0.5,
-      "scene_end": 4.8,
-      "text": "Un aspirante decide en minutos. ¿Tu institución responde a tiempo?"
-    },
-    {
-      "start": 5.3,
-      "scene_end": 11.4,
-      "text": "Del primer clic a la matrícula: descubre, compara, decide, planifica, conversa y matricúlate."
-    },
-    {
-      "start": 11.9,
-      "scene_end": 18.92,
-      "text": "Treinta y cuatro maestrías en siete áreas, cada una con su ficha y su fuente oficial."
-    },
-    {
-      "start": 19.4,
-      "scene_end": 26.14,
-      "text": "Filtra por área y compara hasta tres programas lado a lado."
-    },
-    {
-      "start": 26.6,
-      "scene_end": 35.04,
-      "text": "Tres preguntas conectan el interés del aspirante con las maestrías que se ajustan a él."
-    },
-    {
-      "start": 35.5,
-      "scene_end": 42.14,
-      "text": "Un asistente responde con el catálogo oficial, y dice con claridad lo que todavía no está publicado."
-    },
-    {
-      "start": 42.6,
-      "scene_end": 50.87,
-      "text": "Calcula la cuota mensual con la cotización vigente de admisiones."
-    },
-    {
-      "start": 51.3,
-      "scene_end": 59.94,
-      "text": "Cada canal pide su propio permiso. Correo, WhatsApp y llamadas son opcionales."
-    },
-    {
-      "start": 60.3,
-      "scene_end": 64.74,
-      "text": "La captación empieza en la búsqueda."
-    },
-    {
-      "start": 65.3,
-      "scene_end": 76.54,
-      "text": "Un motor de contenidos convierte búsquedas reales en guías de posgrado. El equipo revisa cada texto antes de publicarlo."
-    },
-    {
-      "start": 76.9,
-      "scene_end": 83.65,
-      "text": "Un plan editorial público y guías que responden a búsquedas reales."
-    },
-    {
-      "start": 83.9,
-      "scene_end": 92.45,
-      "text": "El CRM trabaja las señales."
-    },
-    {
-      "start": 85.6,
-      "scene_end": 92.45,
-      "text": "Lee la conversación, propone el siguiente paso y el equipo decide."
-    },
-    {
-      "start": 89.3,
-      "scene_end": 92.45,
-      "text": "Dos mensajes por semana, como máximo."
-    },
-    {
-      "start": 92.9,
-      "scene_end": 102.15,
-      "text": "Pega un correo o un resumen de llamada. El CRM extrae el programa, la intención, el obstáculo y la frase que lo respalda."
-    },
-    {
-      "start": 102.6,
-      "scene_end": 111.61,
-      "text": "Cada expediente muestra el siguiente paso y su responsable, las tareas y la automatización activa."
-    },
-    {
-      "start": 112.0,
-      "scene_end": 119.01,
-      "text": "De la ficha a la matrícula. Cada etapa se mide por separado, y la matrícula exige evidencia en el expediente."
-    },
-    {
-      "start": 119.6,
-      "scene_end": 127.21,
-      "text": "De la búsqueda a la matrícula. Sitio, contenidos y CRM con agentes, en una sola plataforma."
-    }
-  ]
+  "lines": {
+    "hook": "A future master's student has questions. The first institution to answer them well wins the conversation.",
+    "title": "This is Casa Grande's student acquisition engine. One connected system, from the first search to enrollment.",
+    "portal": "It starts with a fast, modern portal. Thirty-four verified master's programs, and a direct line to an AI admissions officer.",
+    "catalog": "Students search instantly, filter by area, and see which programs are open for enrollment right now.",
+    "call": "Andrea, the AI admissions officer, answers in Ecuadorian Spanish. She spells back the email, reads back the phone number, and captures the program, city, timing, and key questions. Seventeen data points, structured the moment the call ends.",
+    "form": "Prefer the web? One form sends the inquiry straight into the CRM, with consent recorded channel by channel.",
+    "crm": "In the Admin, every applicant lands in a six-stage pipeline, with verification badges, lead scores, and the full call activity.",
+    "lead": "Open a record, and the conversation intelligence is already there. Follow-up emails are ready to send, and callback tasks go straight to an advisor.",
+    "seo": "SEO Analysis maps real search demand in Ecuador. Two thousand six hundred monthly searches across twenty-two programs, with every finding tied to the data.",
+    "content": "Then the Content Engine turns that demand into guides. Drafted from the official catalog, edited, and published by your team.",
+    "flywheel": "Search brings students in. Conversations qualify them. The CRM converts them. And every insight feeds the next guide.",
+    "closing": "Casa Grande's student acquisition engine. From the first search, to enrollment."
+  }
 }

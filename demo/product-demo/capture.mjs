@@ -1,9 +1,10 @@
-// Records the real product (public portal, admissions CRM demo, content engine)
-// with Playwright. Every scenario only reads or previews: no form is submitted,
-// no booking is created, and the CRM runs in its built-in fictitious demo mode.
+// Records the student acquisition engine (GitHub Pages portal + Admin) with Playwright.
+// Run it against a LOCAL stack seeded with fictitious applicants (see README): the form
+// scenario submits a lead, and the Admin shows every lead it holds, so never point this
+// at production.
 //
-//   BASE_URL=https://casa-grande-posgrados.francisco.chatgpt.site node capture.mjs
-//   node capture.mjs chat crm-conversation        # optional: record only some clips
+//   BASE_URL=http://localhost:8080 node capture.mjs
+//   node capture.mjs crm lead                      # optional: record only some clips
 import { createRequire } from 'node:module';
 import { mkdirSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +17,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(here, 'build', 'clips');
 mkdirSync(outDir, { recursive: true });
 
-const BASE = process.env.BASE_URL || 'https://casa-grande-posgrados.francisco.chatgpt.site';
+const BASE = process.env.BASE_URL || 'http://localhost:8080';
+if (!/^http:\/\/(localhost|127\.0\.0\.1)/.test(BASE)) throw new Error('Record against a local, fictitious stack only.');
 const VIEW = { width: 1600, height: 900 };
 const EXECUTABLE = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium';
 
@@ -68,169 +70,139 @@ async function glide(page, locator) {
 }
 
 const scenarios = {
-  // 1. Discover: the portal's promise, then the catalog entry point.
-  home: async page => {
+  // 1. Attract: the portal's promise and the AI admissions officer line.
+  portal: async page => {
     await page.goto(BASE + '/', { waitUntil: 'load' });
-    await pause(2200);
-    await scrollTo(page, 560, 1300);
-    await pause(900);
-    await scrollTo(page, 1180, 1500);
-    await pause(1000);
-    await scrollTo(page, 0, 900);
-    await pause(700);
-    await glide(page, page.getByRole('link', { name: /Explorar maestrías/ }));
-    await pause(900);
+    await pause(2600);
+    await glide(page, page.locator('#hero-program-count, h1').first());
+    await page.evaluate(() => { const y = document.querySelector('#voz-ia').getBoundingClientRect().top + window.scrollY - 70; window.__y = y; });
+    await scrollTo(page, await page.evaluate(() => window.__y), 1600);
+    await pause(2600);
+    await glide(page, page.locator('#copy-phone-btn'));
+    await pause(1600);
   },
 
-  // 2. Compare: filter by area, then compare two programs side by side.
+  // 2. Explore: 34 programs, instant search, area chips, open-enrollment filter.
   catalog: async page => {
-    await page.goto(BASE + '/programas', { waitUntil: 'load' });
+    await page.goto(BASE + '/', { waitUntil: 'load' });
+    await pause(800);
+    await page.evaluate(() => window.scrollTo(0, document.querySelector('#catalogo').getBoundingClientRect().top + window.scrollY - 70));
+    await pause(1400);
+    await glide(page, page.locator('#catalog-search'));
+    await page.locator('#catalog-search').click();
+    await page.locator('#catalog-search').pressSequentially('inteligencia', { delay: 110 });
     await pause(1800);
-    await glide(page, page.locator('#area-filter'));
-    await page.locator('#area-filter').selectOption({ label: 'Negocios' });
-    await pause(1300);
-    const compare = page.locator('input[aria-label^="Comparar"]:visible');
-    await compare.nth(1).waitFor({ state: 'attached', timeout: 15000 });
-    await glide(page, compare.nth(0));
-    await compare.nth(0).check({ force: true });
-    await pause(700);
-    await glide(page, compare.nth(1));
-    await compare.nth(1).check({ force: true });
-    await pause(1600);
-    await scrollTo(page, 260, 900);
-    await pause(1500);
-  },
-
-  // 3. Ask: the public assistant answers from the institutional catalog.
-  chat: async page => {
-    await page.goto(BASE + '/financiamiento', { waitUntil: 'load' });
-    await pause(1600);
-    await glide(page, page.locator('#chat-launch'));
-    await page.locator('#chat-launch').click();
-    await pause(1100);
-    await glide(page, page.getByRole('button', { name: '¿Cómo consulto el costo?' }));
-    await page.getByRole('button', { name: '¿Cómo consulto el costo?' }).click();
-    await pause(3200);
-    await pause(1600);
-  },
-
-  // 4. Orient: three questions to find a fit.
-  orientation: async page => {
-    await page.goto(BASE + '/orientacion', { waitUntil: 'load' });
-    await pause(1500);
-    await glide(page, page.getByText('Tecnología', { exact: true }));
-    await page.getByText('Tecnología', { exact: true }).click();
-    await pause(700);
-    await glide(page, page.getByRole('button', { name: 'Continuar' }));
-    await page.getByRole('button', { name: 'Continuar' }).click();
-    await pause(1300);
-    for (let i = 0; i < 2; i++) {
-      const option = page.locator('label').filter({ hasText: /./ }).locator('visible=true').nth(1);
-      if (await option.count()) { await glide(page, option); await option.click().catch(() => {}); }
-      await pause(700);
-      const next = page.getByRole('button', { name: /Continuar|Ver resultados|Ver mis resultados/ });
-      if (await next.count()) { await glide(page, next); await next.first().click().catch(() => {}); }
-      await pause(1300);
-    }
-    await pause(1500);
-  },
-
-  // 5. Plan: the investment simulator with the user's own quote.
-  simulator: async page => {
-    await page.goto(BASE + '/financiamiento', { waitUntil: 'load' });
-    await pause(1500);
-    await glide(page, page.locator('#finance-program'));
-    await page.locator('#finance-program').selectOption({ index: 1 });
-    await pause(700);
-    await glide(page, page.locator('#investment'));
-    await page.locator('#investment').click();
-    await page.locator('#investment').pressSequentially('9800', { delay: 140 });
+    await page.locator('#catalog-search').fill('');
     await pause(500);
-    await glide(page, page.locator('#months'));
-    await page.locator('#months').fill('');
-    await page.locator('#months').pressSequentially('24', { delay: 160 });
-    await pause(500);
-    await glide(page, page.locator('#rate'));
-    await page.locator('#rate').fill('');
-    await page.locator('#rate').pressSequentially('8', { delay: 160 });
-    await pause(1200);
-    await glide(page, page.locator('#monthly'));
-    await pause(2600);
-  },
-
-  // 6. Consent: a request form with channel-by-channel permissions. Not submitted.
-  request: async page => {
-    await page.goto(BASE + '/solicitar', { waitUntil: 'load' });
-    await pause(1500);
-    await glide(page, page.locator('input[name=name]'));
-    await page.locator('input[name=name]').click();
-    await page.locator('input[name=name]').pressSequentially('Valeria Ejemplo', { delay: 70 });
-    await glide(page, page.locator('input[name=email]'));
-    await page.locator('input[name=email]').click();
-    await page.locator('input[name=email]').pressSequentially('ejemplo@correo.test', { delay: 50 });
-    await glide(page, page.locator('select[name=program]'));
-    await page.locator('select[name=program]').selectOption({ index: 1 });
+    const chip = page.locator('[data-area-chip]').filter({ hasText: 'Negocios' }).first();
+    await glide(page, chip);
+    await chip.click();
     await pause(900);
-    await scrollTo(page, 430, 1100);
-    await pause(700);
-    await glide(page, page.locator('input[name=consentEmail]'));
-    await page.locator('input[name=consentEmail]').check({ force: true });
+    await glide(page, page.locator('#open-only-filter'));
+    await page.locator('#open-only-filter').check({ force: true });
+    await pause(1200);
+    await scrollTo(page, await page.evaluate(() => window.scrollY + 360), 1100);
+    await pause(1600);
+  },
+
+  // 3. Convert: a web inquiry lands in the CRM (local DB, fictitious applicant).
+  form: async page => {
+    await page.goto(BASE + '/?programa=maestria-en-ia-y-ciencia-de-datos#solicitar', { waitUntil: 'load' });
+    await pause(1200);
+    await page.evaluate(() => window.scrollTo(0, document.querySelector('#solicitar').getBoundingClientRect().top + window.scrollY - 40));
+    await pause(1000);
+    const type = async (sel, text, delay = 55) => { await glide(page, page.locator(sel)); await page.locator(sel).click(); await page.locator(sel).pressSequentially(text, { delay }); };
+    await type('#lead-name', 'Valentina Ríos Mejía');
+    await type('#lead-email', 'valentina.rios@example.com', 35);
+    await type('#lead-phone', '0990000109', 60);
+    await type('#lead-city', 'Guayaquil');
+    await glide(page, page.locator('#lead-consent-email'));
+    await page.locator('#lead-consent-email').check({ force: true });
+    await page.locator('#lead-consent-voice').check({ force: true });
     await pause(500);
-    await glide(page, page.locator('input[name=consentVoice]'));
-    await page.locator('input[name=consentVoice]').uncheck({ force: true });
+    await glide(page, page.locator('#lead-submit-btn'));
+    await page.locator('#lead-submit-btn').click();
+    await page.locator('#lead-success').waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+    await page.locator('#lead-success').scrollIntoViewIfNeeded().catch(() => {});
     await pause(2600);
   },
 
-  // 7. Attract: the content engine's public plan and guides.
-  editorial: async page => {
-    await page.goto(BASE + '/motor-de-contenidos', { waitUntil: 'load' });
+  // 4. Organize: CRM KPIs, six-stage pipeline, call activity.
+  crm: async page => {
+    await page.goto(BASE + '/admin/#crm', { waitUntil: 'load' });
+    await page.locator('[data-lead-id]').first().waitFor({ timeout: 20000 });
+    await pause(2600);
+    const card = page.locator('article[data-lead-id]').filter({ hasText: 'Valentina' }).first();
+    await card.hover({ force: true });
+    await pause(700);
+    const sel = card.locator('select').first();
+    if (await sel.count()) { await sel.selectOption({ label: 'En orientación' }).catch(() => {}); }
+    await pause(1600);
+    await glide(page, page.locator('[data-crm-view="activity"]'));
+    await page.locator('[data-crm-view="activity"]').click();
     await pause(2200);
-    await scrollTo(page, 720, 1400);
-    await pause(900);
-    await scrollTo(page, 1500, 1800);
-    await pause(900);
-    await glide(page, page.getByRole('link', { name: 'Leer la guía' }));
+    await scrollTo(page, 380, 1300);
     await pause(1800);
   },
 
-  // 8. Qualify: paste a fictitious email and let the CRM extract the case.
-  'crm-conversation': async page => {
-    await page.goto(BASE + '/crm', { waitUntil: 'load' });
-    await pause(1800);
-    await glide(page, page.locator('a[data-view="conversaciones"]'));
-    await page.locator('a[data-view="conversaciones"]').click();
-    await pause(1200);
-    await page.locator('#conversation-form').scrollIntoViewIfNeeded();
-    await pause(700);
-    await glide(page, page.getByRole('button', { name: 'Analizar conversación' }));
-    await page.getByRole('button', { name: 'Analizar conversación' }).click();
-    await pause(3200);
-    await page.locator('#conversation-result').scrollIntoViewIfNeeded();
+  // 5. Act: one applicant record — verified call intelligence, follow-up, tasks.
+  lead: async page => {
+    await page.goto(BASE + '/admin/#crm', { waitUntil: 'load' });
+    await page.locator('[data-lead-id]').first().waitFor({ timeout: 20000 });
+    await pause(1000);
+    const card = page.locator('article[data-lead-id]').filter({ hasText: 'Gabriela' }).first();
+    await glide(page, card);
+    await card.click();
+    await page.locator('#candidate-drawer').waitFor({ state: 'visible', timeout: 10000 });
+    await pause(2800);
+    await glide(page, page.locator('[data-drawer-tab="nurture"]'));
+    await page.locator('[data-drawer-tab="nurture"]').click();
     await pause(900);
-    await scrollTo(page, (await page.evaluate(() => window.scrollY)) + 380, 1400);
+    await glide(page, page.locator('[data-template="resumen"]'));
+    await page.locator('[data-template="resumen"]').click();
+    await pause(2400);
+    await glide(page, page.locator('[data-drawer-tab="tasks"]'));
+    await page.locator('[data-drawer-tab="tasks"]').click();
+    await pause(2200);
+  },
+
+  // 6. Grow: Ecuador search demand and the evidence-bound analysis.
+  seo: async page => {
+    await page.goto(BASE + '/admin/#seo', { waitUntil: 'load' });
+    await page.locator('#seo-table-body tr').first().waitFor({ timeout: 20000 });
+    await pause(2400);
+    await scrollTo(page, await page.evaluate(() => { const h = [...document.querySelectorAll('h2,h3')].find(e => /Matriz de Oportunidad/.test(e.textContent)); return h ? h.getBoundingClientRect().top + window.scrollY - 90 : 600; }), 1500);
     await pause(2600);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await pause(400);
+    await glide(page, page.locator('#seo-select-top-btn'));
+    await page.locator('#seo-select-top-btn').click();
+    await pause(700);
+    const chip = page.locator('[data-seo-q]').first();
+    await glide(page, chip);
+    await chip.click();
+    await pause(500);
+    await glide(page, page.locator('#seo-analyze-btn'));
+    await page.locator('#seo-analyze-btn').click();
+    await pause(3200);
+    await page.locator('#seo-findings-box').scrollIntoViewIfNeeded().catch(() => {});
+    await pause(2400);
   },
 
-  // 9. Act: the case view with owner, next step, tasks and automation.
-  'crm-case': async page => {
-    await page.goto(BASE + '/crm', { waitUntil: 'load' });
-    await pause(1500);
-    const openCase = page.getByRole('button', { name: 'Abrir expediente' }).first();
-    await openCase.waitFor({ state: 'visible', timeout: 20000 });
-    await glide(page, openCase);
-    await openCase.click({ force: true });
-    await page.locator('#panel[open]').waitFor({ state: 'visible', timeout: 15000 });
-    await pause(1500);
-    await page.locator('#panel').hover({ position: { x: 300, y: 300 } });
-    for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 260); await pause(900); }
-    await pause(900);
-    await page.keyboard.press('Escape');
-    await pause(700);
-    await glide(page, page.locator('a[data-view="agentes"]'));
-    await page.locator('a[data-view="agentes"]').click();
-    await pause(1800);
-    await scrollTo(page, 0, 900);
-    await pause(1200);
+  // 7. Publish: the content engine turns demand into a draft guide.
+  content: async page => {
+    await page.goto(BASE + '/admin/#content', { waitUntil: 'load' });
+    await page.locator('[data-quick-draft]').first().waitFor({ timeout: 20000 });
+    await pause(2200);
+    const draft = page.locator('[data-quick-draft]').first();
+    await glide(page, draft);
+    await draft.click();
+    await pause(3200);
+    await glide(page, page.locator('[data-studio-mode="preview"]'));
+    await page.locator('[data-studio-mode="preview"]').click();
+    await pause(1600);
+    await page.mouse.wheel(0, 320);
+    await pause(2200);
   },
 };
 
