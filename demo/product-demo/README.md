@@ -62,8 +62,23 @@ motor de contenidos son las del sitio publicado en el momento de la grabación; 
 conversión. Si la universidad tiene resultados medidos, pueden añadirse como una escena aparte
 con su fuente y su periodo.
 
+## Narración
+
+`narrate.py` locuta el texto de `narration/lines.json` con Kokoro (voz `ef_dora`, español) y
+añade la pista al video sin volver a renderizar las imágenes:
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install kokoro-onnx soundfile huggingface_hub numpy
+.venv/bin/python narrate.py       # build/product-demo-narrated.mp4
+```
+
+Los modelos se descargan de `onnx-community/Kokoro-82M-v1.0-ONNX` en Hugging Face y quedan en
+`build/kokoro/`. Cada línea tiene su hora de inicio en segundos. El script avisa si una línea
+supera su escena o se solapa con la siguiente. No hay música.
+
 ## Pendiente
 
-- No hay narración ni música. Se pueden añadir como pistas de audio en `ffmpeg` al renderizar.
+- La narración se generó sin escucharla. Conviene revisarla en el video, sobre todo los
+  nombres propios y las siglas (CRM, WhatsApp).
 - El texto está en español, como la interfaz grabada. Una versión en inglés requiere cambiar los
-  textos de `plan` y las escenas de título; las grabaciones seguirían en español.
+  textos de `plan` en `demo.js` y `narration/lines.json`; las grabaciones seguirían en español.
