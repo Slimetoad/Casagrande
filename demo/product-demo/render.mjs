@@ -83,7 +83,7 @@ if (stillAt !== null) {
 mkdirSync(path.dirname(outFile), { recursive: true });
 const frames = Math.round(total * FPS);
 const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
-  '-c:v', 'libx264', '-preset', 'medium', '-crf', '17', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outFile], { stdio: ['pipe', 'inherit', 'inherit'] });
+  '-c:v', 'libx264', '-preset', 'fast', '-crf', '17', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outFile], { stdio: ['pipe', 'inherit', 'inherit'] });
 const started = Date.now();
 for (let i = 0; i < frames; i++) {
   await page.evaluate(time => window.renderAt(time), i / FPS);

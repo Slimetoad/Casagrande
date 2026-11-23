@@ -57,8 +57,9 @@ Cada afirmación del video procede del código o del texto publicado del portal:
 
 El video no muestra cifras de resultados. El repositorio no contiene mediciones de conversión
 atribuibles al producto, y el propio tablero de captación advierte que sus columnas no prueban
-causalidad. Los datos del CRM y del motor de contenidos que aparecen en pantalla son ficticios o
-de muestra. Si la universidad tiene resultados medidos, pueden añadirse como una escena aparte
+causalidad. Los datos del CRM son ficticios (modo de demostración). Las cifras de búsqueda del
+motor de contenidos son las del sitio publicado en el momento de la grabación; no son resultados de
+conversión. Si la universidad tiene resultados medidos, pueden añadirse como una escena aparte
 con su fuente y su periodo.
 
 ## Pendiente

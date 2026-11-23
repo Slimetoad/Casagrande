@@ -277,7 +277,7 @@
     const sub = make('p', 'sub', 'Sitio, contenidos y CRM con agentes, en una sola plataforma.');
     sub.style.cssText = 'text-align:center;margin:44px auto 0;';
     wrap.appendChild(sub);
-    const legal = make('p', 'legal', 'Demostración grabada en el portal público y en el CRM de muestra, con datos ficticios. Los resultados dependen de cada institución.');
+    const legal = make('p', 'legal', 'Demostración grabada en el portal público y en el CRM de muestra. Los datos del CRM son ficticios; las cifras de búsqueda son las del sitio al grabar. Los resultados dependen de cada institución.');
     node.appendChild(legal);
     master.from(logo, { autoAlpha: 0, y: 24, duration: 0.9, ease: 'power3.out' }, start + 0.1);
     master.from(sub, { autoAlpha: 0, y: 20, duration: 0.8, ease: 'power3.out' }, start + 3.2);
