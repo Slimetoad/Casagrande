@@ -399,3 +399,65 @@ test('el inicio de activación excluye trabajos anteriores de correo y WhatsApp 
   await runDueJobs(env,programs);
   assert.equal(sent.length,2);
 });
+
+test('correo web envía HTML de marca UCG, confirma detalles enviados, protege PII y separa URLs de Pages y Railway',async t=>{
+  const {programs:catalog}=await import('../src/catalog.js');
+  const program=catalog.find(p=>p.slug==='comunicacion-estrategica-e-imagen-institucional');
+  const env={
+    DB:database(),
+    OUTREACH_ENABLED:'true',
+    RESEND_API_KEY:'resend-local',
+    RESEND_FROM:'Posgrados UCG <casagrande@mail.coninteligensia.com>',
+    PUBLIC_BASE_URL:'https://slimetoad.github.io/Casagrande',
+    RAILWAY_PUBLIC_DOMAIN:'casagrande-posgrados-production.up.railway.app',
+    INSTITUTIONAL_LIVE:'true',
+    RETELL_INBOUND_NUMBER:'+19124915544'
+  };
+  const date=new Date().toISOString();
+  const token='a1b2c3d4'.repeat(8);
+  const leadContext=JSON.stringify({
+    ciudad:'Guayaquil',
+    horizonte:'Próxima convocatoria',
+    solicitaCita:true,
+    consulta:'Quiero saber horarios <script>alert(1)</script> y escribir a privado@correo.ec',
+    simulatorPlan:{tuition:2800,downPayment:560,months:12,monthlyPayment:187}
+  });
+  env.DB.raw.prepare('INSERT INTO leads(id,name,email,pref_token,source,created_at,updated_at,consent_email,consent_voice,phone,program,context) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run('lead-web-1','Valeria Cedeño','valeria.cedeno@example.org',token,'Formulario ficha 10x',date,date,1,1,'+593998887766',program.slug,leadContext);
+  env.DB.raw.prepare('INSERT INTO jobs(id,lead_id,channel,kind,status,due_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+    .run('job-web-1','lead-web-1','email','welcome','pending',date,date,date);
+
+  let sentPayload=null;
+  t.mock.method(globalThis,'fetch',async(url,opts)=>{
+    assert.equal(url,'https://api.resend.com/emails');
+    sentPayload=JSON.parse(opts.body);
+    return Response.json({id:'resend-html-welcome'});
+  });
+
+  const outcome=await runDueJobs(env,catalog);
+  assert.equal(outcome.accepted,1);
+  assert.ok(sentPayload);
+  assert.match(sentPayload.subject,/¡Gracias por escribirnos, Valeria!/);
+  assert.match(sentPayload.text,/Hola, Valeria\./);
+  assert.match(sentPayload.text,/se pondrá en contacto contigo muy pronto/);
+  assert.match(sentPayload.text,/RPC-SO-30-No\.513-2024/);
+  assert.match(sentPayload.text,/\$2\.800 USD/);
+  assert.match(sentPayload.text,/Guayaquil/);
+  assert.match(sentPayload.text,/Próxima convocatoria/);
+  assert.match(sentPayload.text,/Equipo de Admisiones de Posgrados/);
+  assert.match(sentPayload.text,/Universidad Casa Grande/);
+  assert.match(sentPayload.text,/\+19124915544/);
+  assert.match(sentPayload.text,/https:\/\/slimetoad\.github\.io\/Casagrande\/programas\/comunicacion-estrategica-e-imagen-institucional\//);
+  assert.match(sentPayload.text,/https:\/\/casagrande-posgrados-production\.up\.railway\.app\/confirmar\/lead-web-1\./);
+  assert.match(sentPayload.text,new RegExp('https://casagrande-posgrados-production\\.up\\.railway\\.app/preferencias/' + token));
+  assert.match(sentPayload.text,/https:\/\/casagrande-posgrados-production\.up\.railway\.app\/cita\?programa=comunicacion-estrategica-e-imagen-institucional/);
+  assert.equal(sentPayload.headers['List-Unsubscribe'],'<https://casagrande-posgrados-production.up.railway.app/api/preferences/' + token + '>');
+  assert.ok(sentPayload.html && sentPayload.html.includes('Universidad Casa Grande'));
+  assert.ok(sentPayload.html.includes('Resumen de tu solicitud'));
+  assert.ok(sentPayload.html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+  assert.ok(!sentPayload.html.includes('<script>'));
+  for(const forbidden of ['valeria.cedeno@example.org','+593998887766','privado@correo.ec']){
+    assert.ok(!sentPayload.text.includes(forbidden),`text leaked PII: ${forbidden}`);
+    assert.ok(!sentPayload.html.includes(forbidden),`html leaked PII: ${forbidden}`);
+  }
+});

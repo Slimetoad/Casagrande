@@ -2,6 +2,7 @@ import {captureInboundReply,recruitmentReplyTo} from './replies.js';
 import {admissionProof, channelWebhook, contactEvent as event, explicitOptOut, jobTable, stopVoice, submitRetell, submitWhatsapp} from './channels.js';
 import {conversationIntakeReady, ingestConversation} from './conversation-intake.js';
 import {reconcileNurtureEmail} from './conversation-nurture.js';
+import {buildOutreachEmail, serviceOrigin} from './welcome-email.js';
 import {recordMailLoopback} from './mail-loopback.js';
 import {activeAI, aiText, all, channelPhone, clean, configRows, digest, e164, eligibleQuery, enabled, getSearchConsole, getSemrush, gscReady,
   incrementLimit, inHours, mailReady, matches, normalized, now, outreachStartAt, programFact, publicOrigin, redact,
@@ -173,36 +174,15 @@ function canDispatch(l,channel,kind){
   return ['Nuevo','En orientación'].includes(l.stage) && ['welcome','guidance','callback'].includes(kind);
 }
 async function emailCopy(env,job,lead,program){
-  const base=publicOrigin(env),prefs=base+'/preferencias/'+lead.pref_token;
-  const first=clean(lead.name,100).split(' ')[0],title=program?.title,live=env.INSTITUTIONAL_LIVE==='true';
-  const visit=program?base+'/programas/'+program.slug:base+'/programas';
-  const formal='Puedes dejar de recibir correos o cambiar tus preferencias desde tu enlace de baja.\n'+prefs;
-  const closing=live?'Equipo de Admisiones de Posgrados\nUniversidad Casa Grande':'Equipo de orientación · Portal piloto de posgrados';
-  const guidance=job.kind==='guidance',application=job.kind==='application',admission=job.kind==='admission';
-  let subject=guidance?'Tu siguiente paso para elegir un posgrado':(title?'Orientación sobre '+title:'Tu orientación de posgrados');
-  let introduction=guidance?'¿Qué te falta por resolver'+(title?' sobre '+title:' para elegir un posgrado')+'?':'Recibimos tu solicitud de orientación'+(title?' sobre '+title:' sobre los posgrados')+'.';
-  if(application){subject='Tu proceso de postulación';introduction='El equipo que lleva tu caso registró que tu postulación está en curso.';}
-  if(admission){subject='Próximos pasos de tu matrícula';introduction='El equipo que lleva tu caso registró tu admisión. Podemos orientarte para completar tu matrícula.';}
-  let next='';
-  if(application)next='Consulta con tu asesor qué documentos requieren verificación y si hay una fecha vigente para completar tu expediente.';
-  else if(admission)next='Confirma los pasos administrativos, el costo vigente y las condiciones de pago con tu asesor antes de realizar un pago.';
-  else if(/financi|inversi|calcul|simul/i.test(lead.source))next='Para preparar tu presupuesto, revisa la entrada y el número de cuotas en el simulador.\n'+base+'/financiamiento'+(program?'?programa='+encodeURIComponent(program.slug):'');
-  else if(lead.stage==='En postulación'||lead.stage==='Admitido')next='Un asesor puede revisar contigo qué documentos requieren atención y el siguiente paso de tu proceso.';
-  else if(/orient|quiz/i.test(lead.source))next='Compara lo que te interesa aprender con la modalidad y el enfoque de la ficha. El equipo de orientación puede ayudarte a contrastar otras opciones.';
-  else next='Antes de elegir, revisa qué aprenderás, cómo encaja la modalidad con tu semana y qué requisitos necesitas consultar.';
-  const lines=[first?'Hola, '+first+'.':'Hola.',introduction];
-  if(job.kind==='welcome'){
+  const serviceBase=serviceOrigin(env);
+  let confirmUrl='';
+  if(job.kind==='welcome' && serviceBase){
     const {leadConfirmationUrl}=await import('./lead-confirmation.js');
     const created=await select(env.DB,'SELECT created_at FROM jobs WHERE id=? AND lead_id=?',job.id,lead.id).first();
-    const confirm=await leadConfirmationUrl(base,lead,created?.created_at || lead.created_at);
-    if(confirm)lines.push('Confirma o corrige la maestría que te interesa y cuándo te gustaría empezar desde este enlace privado.\n'+confirm);
-    else lines.push('Si cambió la maestría que te interesa o cuándo te gustaría empezar, cuéntaselo al equipo de orientación cuando solicites una cita.');
+    confirmUrl=await leadConfirmationUrl(serviceBase,lead,created?.created_at || lead.created_at);
   }
-  const agenda=base+'/cita'+(program?'?programa='+encodeURIComponent(program.slug):'');
-  lines.push(next,'Puedes consultar '+(title?'la ficha del programa':'el catálogo')+' aquí.\n'+visit,
-    'Si te gustaría conversar, puedes solicitar una cita aquí.\n'+agenda,closing,formal);
   const replyTo=await recruitmentReplyTo(env,lead)||env.RESEND_REPLY_TO;
-  return {from:env.RESEND_FROM,to:[lead.email],tags:[{name:'flujo',value:'posgrados-ucg'},{name:'seguimiento',value:job.id}],subject,text:lines.join('\n\n'),...(replyTo?{reply_to:replyTo}:{}),headers:{'List-Unsubscribe':'<'+base+'/api/preferences/'+lead.pref_token+'>','List-Unsubscribe-Post':'List-Unsubscribe=One-Click'}};
+  return buildOutreachEmail({env,job,lead,program,confirmUrl,replyTo});
 }
 async function dispatchSnapshot(env,job,lead,startsAt){
   const voice=job.channel==='voice';
