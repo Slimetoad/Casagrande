@@ -11,6 +11,48 @@ const whatsappTask = 'Responder por WhatsApp al aspirante';
 const advisorTask = 'Llamar al aspirante que solicitó hablar con un asesor';
 const knownId = value => typeof value==='string' && /^[\w.+=/-]{1,240}$/.test(value);
 const list = value => Array.isArray(value)?value:[];
+const validEmail = value => typeof value==='string' && value.length<=254 && /^[^<>@\s,;]+@[^<>@\s,;]+\.[^<>@\s,;]+$/.test(value) ? value.toLowerCase() : '';
+const stripUrls = (value,max=500) => clean(value,max).replace(/(?:https?:\/\/|www\.)\S+/gi,'').replace(/[<>]/g,' ').replace(/\s+/g,' ').trim().slice(0,max);
+const boolFlag = (value,fallback=false) => value===true || value==='true' ? true : value===false || value==='false' ? false : fallback;
+
+function parseEmail(raw) {
+  const value=clean(raw,254).trim();
+  const bracketed=value.match(/^[^<>]*<([^<>]+)>$/)?.[1]||value;
+  return validEmail(bracketed.trim().toLowerCase());
+}
+
+function parseName(raw) {
+  const value=clean(raw,120).replace(/[<>]/g,' ').replace(/\s+/g,' ').trim();
+  if(!value || /^(?:n\/a|na|no proporcionad[oa]|desconocid[oa]|ningun[oa]?|no indica|sin nombre)$/i.test(value))return '';
+  return value;
+}
+
+function extractRetellData(call,fallbackPhone) {
+  const analysis=call.call_analysis?.custom_analysis_data;
+  if(!analysis || typeof analysis!=='object' || Array.isArray(analysis))return null;
+  const email=parseEmail(analysis.applicant_email);
+  if(!email)return null;
+  const phone=channelPhone(analysis.applicant_phone) || fallbackPhone || '';
+  const name=parseName(analysis.applicant_name);
+  const summary=stripUrls(analysis.call_summary_es || call.call_analysis?.call_summary || '',1200);
+  return {
+    name,
+    email,
+    phone,
+    programSlug:clean(analysis.program_slug,120),
+    programInterest:stripUrls(analysis.program_interest,200),
+    summary,
+    city:stripUrls(analysis.city,120),
+    modality:stripUrls(analysis.preferred_modality,80),
+    horizon:stripUrls(analysis.start_horizon,120),
+    academicBackground:stripUrls(analysis.academic_background,240),
+    keyQuestions:stripUrls(analysis.key_questions,500),
+    obstacles:stripUrls(analysis.obstacles,300),
+    emailConfirmed:boolFlag(analysis.email_confirmed_by_spelling,false),
+    phoneConfirmed:boolFlag(analysis.phone_confirmed_by_readback,false),
+    consentEmail:boolFlag(analysis.consent_email,true)
+  };
+}
 
 export const jobTable = channel => channel==='whatsapp'?'whatsapp_jobs':'jobs';
 export const contactEvent = (db,id,lead,type,description,date,actor) =>
@@ -203,10 +245,20 @@ function retellOccurrence(call) {
 async function captureRetellConversation(env,body,phone,leadId,allowCreate,turns) {
   const call=body.call;
   if(body.event!=='call_analyzed' || call.call_status!=='ended' || call.call_analysis?.in_voicemail===true ||
-    ['voicemail_reached','ivr_reached'].includes(call.disconnection_reason) || !turns.length || !await conversationIntakeReady(env.DB))return;
-  await ingestConversation(env,{
-    provider:'retell',eventId:call.call_id,leadId,phone:phone||undefined,
-    direction:call.direction,kind:'call',text:turns.map(turn=>'User: '+turn.replace(/\s+/g,' ')).join('\n').slice(0,4000),allowCreate,occurredAt:retellOccurrence(call)
+    ['voicemail_reached','ivr_reached'].includes(call.disconnection_reason))return null;
+  const retellData=extractRetellData(call,phone);
+  if((!turns.length && !retellData) || !await conversationIntakeReady(env.DB))return null;
+  const bestPhone=retellData ? (retellData.phone || phone || undefined) : (phone || undefined);
+  const text=turns.length
+    ? turns.map(turn=>'User: '+turn.replace(/\s+/g,' ')).join('\n').slice(0,4000)
+    : ('User: '+(retellData.summary || retellData.programInterest || 'Consulta telefónica de posgrados.')).slice(0,4000);
+  return ingestConversation(env,{
+    provider:'retell',eventId:call.call_id,leadId,
+    name:retellData?.name || undefined,
+    email:retellData?.email || undefined,
+    phone:bestPhone,
+    direction:call.direction,kind:'call',text,allowCreate,occurredAt:retellOccurrence(call),
+    ...(retellData?{retellData}:{})
   });
 }
 
@@ -239,6 +291,27 @@ export async function stopVoice(db,phone,date,reason,leadId=null) {
   ];
   if(e164(phone))writes.unshift(select(db,'INSERT OR IGNORE INTO voice_suppressions(phone,created_at) VALUES(?,?)',phone,date));
   await db.batch(writes);
+}
+
+async function inboundAdvisorRequest(db,leadId,eventId,date,pauseAutomation) {
+  const due=inHours(4);
+  const eligible=" EXISTS(SELECT 1 FROM leads l WHERE l.id=? AND l.stage NOT IN ('Cerrado','Matriculado') AND NOT EXISTS(SELECT 1 FROM voice_suppressions s WHERE s.phone=l.phone))";
+  const unseen=' AND NOT EXISTS(SELECT 1 FROM events WHERE id=?)';
+  const gate=eligible+unseen;
+  const keys=[leadId,eventId];
+  const description='El aspirante solicitó conversar con un asesor durante la llamada entrante.';
+  await db.batch([
+    select(db,"INSERT INTO tasks(id,lead_id,title,status,due_at,created_at) SELECT ?,?,?,'pendiente',?,? WHERE"+gate+" AND NOT EXISTS(SELECT 1 FROM tasks WHERE lead_id=? AND title=? AND status='pendiente')",
+      eventId,leadId,advisorTask,due,date,...keys,leadId,advisorTask),
+    select(db,"UPDATE leads SET paused=MAX(paused,?),next_action=?,due_at=COALESCE((SELECT MIN(due_at) FROM tasks WHERE lead_id=? AND title=? AND status='pendiente'),?),updated_at=?,revision=revision+1 WHERE id=? AND"+gate,
+      Number(pauseAutomation),advisorTask,leadId,advisorTask,due,date,leadId,...keys),
+    select(db,"UPDATE jobs SET status='skipped',last_error='Admisiones debe responder al aspirante.',updated_at=? WHERE lead_id=? AND status='pending' AND"+gate,
+      date,leadId,...keys),
+    select(db,"UPDATE whatsapp_jobs SET status='skipped',last_error='Admisiones debe responder al aspirante.',updated_at=? WHERE lead_id=? AND status='pending' AND"+gate,
+      date,leadId,...keys),
+    select(db,"INSERT INTO events(id,lead_id,type,description,created_at,actor) SELECT ?,?,'solicitud',?,?,'Aspirante' WHERE"+gate,
+      eventId,leadId,description,date,...keys)
+  ]);
 }
 
 async function moveToHuman(db,leadId,phone,eventId,title,description,date,scopeCheck) {
@@ -308,11 +381,23 @@ async function retellWebhook(request,env) {
   if (call.direction==='inbound') {
     if(!to || from===to || to!==env.RETELL_INBOUND_NUMBER || call.agent_id!==env.RETELL_INBOUND_AGENT_ID ||
       (env.RETELL_INBOUND_AGENT_VERSION && String(call.agent_version)!==String(env.RETELL_INBOUND_AGENT_VERSION)))return retellAck();
+    const analysis=call.call_analysis?.custom_analysis_data;
     const turns=retellUserTurns(call);
-    const declined=call.disconnection_reason==='user_requested_dnc' || (body.event==='call_analyzed' && call.call_analysis?.custom_analysis_data?.opt_out===true) ||
+    const declined=call.disconnection_reason==='user_requested_dnc' || (body.event==='call_analyzed' && analysis?.opt_out===true) ||
       turns.some(explicitOptOut);
-    if(declined)await stopVoice(env.DB,from,date,'Baja solicitada durante una llamada.');
-    else await captureRetellConversation(env,body,from,undefined,!!from,turns);
+    const bestPhone=channelPhone(analysis?.applicant_phone) || from;
+    if(declined) {
+      await stopVoice(env.DB,bestPhone||from,date,'Baja solicitada durante una llamada.');
+    } else {
+      const hasEmail=Boolean(parseEmail(analysis?.applicant_email));
+      const canCreate=Boolean(from || bestPhone || hasEmail);
+      const captured=await captureRetellConversation(env,body,from,undefined,canCreate,turns);
+      const wantsAdvisor=call.disconnection_reason==='user_requested_callback' || (body.event==='call_analyzed' && analysis?.human_callback===true);
+      if(wantsAdvisor && captured?.leadId && call.call_status==='ended' && call.disconnection_reason!=='voicemail_reached' && call.call_analysis?.in_voicemail!==true) {
+        const id=await digest(call.call_id);
+        await inboundAdvisorRequest(env.DB,captured.leadId,'retell-callback:'+id,date,!captured.extraction?.retellRecap);
+      }
+    }
     return retellAck();
   }
   if(!to || !from)return retellAck();

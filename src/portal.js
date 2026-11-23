@@ -65,6 +65,7 @@ async function officialGuides(db,slug=null) {
   const {results}=await query.bind(slug,slug).all()
   return new Map(results.map(r=>[r.slug,institutionalUrl(r.official_url)]).filter(([,url])=>url))
 }
+const crossOriginPublicPaths = new Set(['/api/leads','/api/chat','/api/analytics','/api/hubs','/api/citas/solicitar','/api/citas/gestionar'])
 async function route(request,env,url,manual,onLeadCreated) {
   const path = url.pathname.replace(/\/+$/,'') || '/'
   const method = request.method
@@ -88,11 +89,20 @@ async function route(request,env,url,manual,onLeadCreated) {
   if (path === '/api/maintenance/correo/prueba') return handleMailCheck(request,env)
   if (['/api/maintenance/editorial','/api/maintenance/nuevos'].includes(path)) return handleScopedMaintenance(request,env,programs,path.split('/').at(-1))
   if (path === '/api/maintenance') return handleMaintenance(request,env,programs)
+  let activeRequest = request
   if (!['GET','HEAD'].includes(method)) {
     const from = request.headers.get('origin')
-    if (request.headers.get('sec-fetch-site') === 'cross-site' || (from && from !== url.origin && from !== origin)) return json({error:'Origen no permitido.'},403)
+    const trustedCrossOrigin = Boolean(from && env.PUBLIC_BASE_URL && from === origin && origin !== url.origin && crossOriginPublicPaths.has(path))
+    if (!trustedCrossOrigin && (request.headers.get('sec-fetch-site') === 'cross-site' || (from && from !== url.origin && from !== origin))) return json({error:'Origen no permitido.'},403)
     const size = Number(request.headers.get('content-length') || 0)
     if (size > 128000) return json({error:'La solicitud es demasiado grande.'},413)
+    if (trustedCrossOrigin) {
+      const headers = new Headers(request.headers)
+      headers.set('origin', url.origin)
+      headers.delete('sec-fetch-site')
+      const body = await request.arrayBuffer()
+      activeRequest = new Request(request.url, { method, headers, body })
+    }
   }
   if (path.startsWith('/confirmar/')) return handleLeadConfirmation(request,env,url,programs)
   if (path === '/robots.txt') {
@@ -127,14 +137,14 @@ async function route(request,env,url,manual,onLeadCreated) {
     }
     if (method === 'POST' && ['/api/editorial/medir','/api/chat','/api/leads','/api/analytics','/api/hubs','/api/citas/solicitar','/api/citas/gestionar'].includes(path)) {
       const limit = ['/api/analytics','/api/hubs','/api/editorial/medir'].includes(path)?400:path === '/api/chat'?35:path.startsWith('/api/citas/')?30:120
-      if (!await allowPublicAction(request,env,path,limit)) return json({error:'Has realizado varias solicitudes. Inténtalo más tarde.'},429)
+      if (!await allowPublicAction(activeRequest,env,path,limit)) return json({error:'Has realizado varias solicitudes. Inténtalo más tarde.'},429)
     }
-    if(path==='/api/editorial/medir' && method==='POST') return collectArticle(request,env)
-    if(path==='/api/staff/editorial') return handleEditorial(request,env,url,programs,operator)
-    if(path==='/api/hubs')return collectHub(request,env,programs)
-    const next = await handleConversations(request,env,url,programs,operator) || await handleNurture(request,env,url,programs,operator) || await handleAppointments(request,env,url,programs,operator) || await handleIntelligence(request,env,url,programs,operator)
+    if(path==='/api/editorial/medir' && method==='POST') return collectArticle(activeRequest,env)
+    if(path==='/api/staff/editorial') return handleEditorial(activeRequest,env,url,programs,operator)
+    if(path==='/api/hubs')return collectHub(activeRequest,env,programs)
+    const next = await handleConversations(activeRequest,env,url,programs,operator) || await handleNurture(activeRequest,env,url,programs,operator) || await handleAppointments(activeRequest,env,url,programs,operator) || await handleIntelligence(activeRequest,env,url,programs,operator)
     if(next)return next
-    const res = await handleMetrics(request,env,path,operator) || await handleAdvisor(request,env,url,programs,operator) || await handleAdmissions(request,env,url,programs,operator,onLeadCreated) || await handleIntegrations(request,env,url,programs,operator)
+    const res = await handleMetrics(activeRequest,env,path,operator) || await handleAdvisor(activeRequest,env,url,programs,operator) || await handleAdmissions(activeRequest,env,url,programs,operator,onLeadCreated) || await handleIntegrations(activeRequest,env,url,programs,operator)
     return res || json({error:'Ruta no disponible.'},404)
   }
   if (method !== 'GET') return json({error:'Método no permitido.'},405)
