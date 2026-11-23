@@ -10,6 +10,7 @@ import { collectHub,conversionPage } from './conversion.js'
 import { handleIntelligence } from './intelligence.js'
 import { programs } from './catalog.js'
 import { renderStudent } from './student.js'
+import { handleSeoInsights } from './seo-insights-route.js'
 import { renderCRM } from './crm.js'
 import { handleAdvisor } from './advisor.js'
 import { handleAdmissions } from './admissions.js'
@@ -107,6 +108,8 @@ async function route(request,env,url,manual,onLeadCreated) {
   const operator = isStaff ? await resolveOperator(request,env) : null
   if (path.startsWith('/api/staff/') && !operator) return json({error:'Esta sección requiere acceso del equipo de admisiones.'},403)
   if (path.startsWith('/api/') || path.startsWith('/preferencias/')) {
+    if (path==='/api/editorial/insights' || path==='/api/staff/editorial/insights')
+      return handleSeoInsights(request,env,programs,Boolean(operator))
     if (path==='/api/editorial/publico' && method==='GET') {
       const overview=await publicEditorial(env,programs)
       const publicSources=new Set(['Catálogo institucional UCG','OpenSEO · Keyword Generator',researchSource])
