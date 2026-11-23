@@ -12,6 +12,13 @@ import { contactEmail, isPhoneIdentity } from '../src/contact-identity.js';
 import { clean, matches, normalized, programFact } from '../src/providers.js';
 import { loadSeoEvidence } from '../src/seo-insights-data.js';
 import { buildSeoInsights } from '../src/seo-insights.js';
+import {
+  addLiveTarget,
+  analyzeLiveAuditQuestion,
+  crawlLiveTargets,
+  loadLiveAuditSnapshot,
+  removeLiveTarget,
+} from '../src/seo-live-audit.js';
 import { marketSnapshot } from '../src/openseo-ecuador.js';
 import { ensurePlan, publicEditorial } from '../src/editorial-engine.js';
 import { draftEditorialArticle, editorialProposal, institutionalUrl } from '../src/editorial-draft.js';
@@ -937,7 +944,10 @@ async function handleAdminSeoGet(env, url) {
   if (!SEO_PERIODS.has(days)) {
     return crmJson({ error: 'Elige un período válido de 7, 30 o 90 días.' }, 400);
   }
-  const evidence = await loadSeoEvidence(env, programs, days, { team: true });
+  const [evidence, liveAudit] = await Promise.all([
+    loadSeoEvidence(env, programs, days, { team: true }),
+    loadLiveAuditSnapshot(env.DB),
+  ]);
   const programRows = evidence.rows.filter(r => r.kind === 'programa');
   const guideRows = evidence.rows.filter(r => r.kind === 'guia');
   const cpcValues = programRows.map(r => r.metrics?.cpc).filter(v => typeof v === 'number' && Number.isFinite(v) && v > 0);
@@ -954,6 +964,7 @@ async function handleAdminSeoGet(env, url) {
     end: evidence.end,
     rows: evidence.rows,
     marketResearch: marketSnapshot,
+    liveAudit,
     summary: {
       totalPages: evidence.rows.length,
       programsWithVolume,
@@ -962,6 +973,63 @@ async function handleAdminSeoGet(env, url) {
       publishedGuides: guideRows.length
     }
   });
+}
+
+async function handleAdminSeoCrawl(request, env) {
+  const body = (await readJsonBody(request)) || {};
+  const urls = Array.isArray(body.urls) ? body.urls : null;
+  try {
+    const liveAudit = await crawlLiveTargets(env.DB, {
+      urls,
+      includeDefaults: body.includeDefaults === true,
+      checkSitemap: body.checkSitemap !== false,
+    });
+    return crmJson({ ok: true, liveAudit });
+  } catch (error) {
+    return crmJson({ error: error?.message || 'No se pudo completar el rastreo en vivo.' }, 400);
+  }
+}
+
+async function handleAdminSeoTargets(request, env, url) {
+  if (request.method === 'POST') {
+    const body = await readJsonBody(request);
+    if (!body || typeof body.url !== 'string' || !body.url.trim()) {
+      return crmJson({ error: 'Ingresa una URL pública válida con https://.' }, 400);
+    }
+    try {
+      const addedUrl = await addLiveTarget(env.DB, {
+        url: body.url,
+        label: typeof body.label === 'string' ? body.label : '',
+        programSlug: typeof body.programSlug === 'string' && body.programSlug.trim() ? body.programSlug.trim() : null,
+      });
+      const liveAudit = body.crawlNow === false
+        ? await loadLiveAuditSnapshot(env.DB)
+        : await crawlLiveTargets(env.DB, {
+            urls: [addedUrl],
+            checkSitemap: /\/posgrados\/?$/i.test(new URL(addedUrl).pathname) || body.checkSitemap === true,
+          });
+      return crmJson({ ok: true, addedUrl, liveAudit });
+    } catch (error) {
+      return crmJson({ error: error?.message || 'No se pudo agregar la URL.' }, 400);
+    }
+  }
+
+  if (request.method === 'DELETE') {
+    const queryUrl = url.searchParams.get('url');
+    const body = queryUrl ? null : await readJsonBody(request);
+    const targetUrl = queryUrl || body?.url || '';
+    if (!targetUrl) {
+      return crmJson({ error: 'Indica el parámetro url a eliminar.' }, 400);
+    }
+    try {
+      const liveAudit = await removeLiveTarget(env.DB, targetUrl);
+      return crmJson({ ok: true, liveAudit });
+    } catch (error) {
+      return crmJson({ error: error?.message || 'No se pudo eliminar la URL.' }, 400);
+    }
+  }
+
+  return crmJson({ error: 'Método no permitido.' }, 405);
 }
 
 async function handleAdminSeoAnalyze(request, env) {
@@ -977,14 +1045,39 @@ async function handleAdminSeoAnalyze(request, env) {
     return crmJson({ error: 'Escribe una pregunta de hasta 600 caracteres.' }, 400);
   }
   const question = typeof body.question === 'string' && body.question.trim() ? body.question.trim() : DEFAULT_SEO_QUESTION;
-  const evidence = await loadSeoEvidence(env, programs, days, { team: true });
+  const [evidence, liveAudit] = await Promise.all([
+    loadSeoEvidence(env, programs, days, { team: true }),
+    loadLiveAuditSnapshot(env.DB),
+  ]);
   const selectedIds = new Set(ids);
   const rows = selectedIds.size ? evidence.rows.filter(row => selectedIds.has(row.id)) : evidence.rows;
   if (selectedIds.size && !rows.length) {
     return crmJson({ error: 'Las páginas seleccionadas no coinciden con el tablero actual.' }, 422);
   }
   const insights = await buildSeoInsights(env, { days, start: evidence.start, end: evidence.end, rows }, question);
-  return crmJson({ ok: true, days, start: evidence.start, end: evidence.end, ...insights });
+  const wantsLive = body.focusLive === true ||
+    /casagrande\.edu\.ec|posgrados|en vivo|sitemap|schema|json-ld|meta|h1|h2|t[eé]cnic|error|cr[ií]tic|arregl|auditor|rastreo|404/i.test(question);
+
+  if (wantsLive && liveAudit?.audits?.length) {
+    const liveInsights = await analyzeLiveAuditQuestion(env, liveAudit, question);
+    if (liveInsights.findings?.length) {
+      const mergedFindings = body.focusLive === true
+        ? [...liveInsights.findings, ...(insights.findings || []).slice(0, 1)]
+        : [...liveInsights.findings.slice(0, 2), ...(insights.findings || []).slice(0, 2)];
+      return crmJson({
+        ok: true,
+        days,
+        start: evidence.start,
+        end: evidence.end,
+        ...insights,
+        mode: liveInsights.mode === 'modelo' || insights.mode === 'modelo' ? 'modelo' : insights.mode,
+        findings: mergedFindings.slice(0, 4),
+        liveAuditIncluded: true,
+      });
+    }
+  }
+
+  return crmJson({ ok: true, days, start: evidence.start, end: evidence.end, ...insights, liveAuditIncluded: false });
 }
 
 async function ensureEditorialSeeded(env) {
@@ -1335,6 +1428,13 @@ async function routePublicAdmin(request, env, url, path) {
       return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
     }
     return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/seo/crawl') {
+    if (request.method === 'POST') return handleAdminSeoCrawl(request, env);
+    return crmJson({ error: 'Método no permitido.' }, 405);
+  }
+  if (path === '/api/public/admin/seo/targets') {
+    return handleAdminSeoTargets(request, env, url);
   }
   if (path === '/api/public/admin/seo/analyze') {
     if (request.method === 'POST') return handleAdminSeoAnalyze(request, env);

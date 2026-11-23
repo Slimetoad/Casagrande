@@ -342,6 +342,56 @@
         </article>
       </div>
 
+      <!-- LIVE INSTITUTIONAL PAGE AUDITOR & LEARNING ENGINE -->
+      <section id="seo-live-section" class="live-audit-section panel-card" aria-label="Auditoría en Vivo de Páginas Oficiales UCG">
+        <div class="live-audit-head">
+          <div>
+            <span class="badge badge-retell">Rastreo HTML &amp; Sitemap en Vivo</span>
+            <h2>Auditoría en Vivo · casagrande.edu.ec/posgrados y Páginas Reales</h2>
+            <p class="section-sub">Rastrea las páginas oficiales activas de Posgrados UCG (y cualquier nueva URL que agregues) para aprender fallas técnicas, brechas de contenido y prioridades exactas.</p>
+          </div>
+          <div class="live-audit-controls">
+            <span id="seo-live-status" class="sync-inline" role="status" aria-live="polite">Listo para auditar</span>
+            <button id="seo-live-crawl-btn" type="button" class="btn btn-primary btn-sm">🔍 Escanear páginas en vivo</button>
+          </div>
+        </div>
+
+        <form id="seo-live-add-form" class="live-add-form">
+          <label class="live-input-field">
+            <span class="sr-only">Agregar URL pública en vivo (https://...)</span>
+            <input id="seo-live-url-input" type="url" placeholder="https://www.casagrande.edu.ec/posgrados (o cualquier URL pública para aprender y auditar)" required>
+          </label>
+          <label class="live-label-field">
+            <span class="sr-only">Etiqueta opcional</span>
+            <input id="seo-live-label-input" type="text" maxlength="90" placeholder="Etiqueta opcional (ej. MBA oficial)">
+          </label>
+          <button type="submit" class="btn btn-outline btn-sm">＋ Agregar y auditar</button>
+        </form>
+
+        <div id="seo-live-error" class="alert-banner alert-error" role="alert" hidden></div>
+
+        <div id="seo-live-summary" class="live-summary-strip"></div>
+        <div id="seo-live-sitemap-alert" class="live-sitemap-alert" hidden></div>
+
+        <div class="live-audit-columns">
+          <div class="live-col">
+            <div class="live-col-head">
+              <h3>Páginas Reales Auditadas</h3>
+              <span class="table-sub">Diagnóstico SSR HTML, Schema JSON-LD, Metadatos e Imágenes</span>
+            </div>
+            <div id="seo-live-cards" class="live-cards-grid"></div>
+          </div>
+
+          <div class="live-col">
+            <div class="live-col-head">
+              <h3>Qué Debemos Hacer (Aprendizaje en Vivo)</h3>
+              <span class="table-sub">Acciones priorizadas según evidencia real de casagrande.edu.ec</span>
+            </div>
+            <div id="seo-live-actions" class="live-actions-stack"></div>
+          </div>
+        </div>
+      </section>
+
       <!-- COMPETITIVE SEARCH USER-ACQUISITION PLAYBOOK -->
       <section id="seo-playbook-section" class="playbook-section" aria-label="Plan de Acción para Captar Aspirantes">
         <div class="playbook-head">
@@ -417,6 +467,8 @@
           </div>
 
           <div class="seo-prompt-chips">
+            <button type="button" class="chip-btn" data-seo-q="¿Qué errores críticos tiene casagrande.edu.ec/posgrados y qué debemos arreglar primero?" data-seo-focus-live="true">Auditar casagrande.edu.ec/posgrados</button>
+            <button type="button" class="chip-btn" data-seo-q="¿Cómo aprovechamos las fallas técnicas y de contenido del portal actual para captar más aspirantes?" data-seo-focus-live="true">Cómo superar fallas actuales</button>
             <button type="button" class="chip-btn" data-seo-q="¿Qué maestrías tienen mayor demanda mensual en Ecuador y aún no tienen guía publicada?">Mayor demanda sin guía</button>
             <button type="button" class="chip-btn" data-seo-q="¿Dónde conviene priorizar contenido orgánico por alto CPC y competencia?">Alto CPC y competencia</button>
             <button type="button" class="chip-btn" data-seo-q="¿Qué páginas están convirtiendo vistas en consultas y cuáles necesitan mejorar su CTA?">Conversión del portal</button>

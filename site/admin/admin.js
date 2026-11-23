@@ -55,6 +55,10 @@
       area: '',
       opportunity: ''
     },
+    liveAudit: null,
+    liveAuditCrawling: false,
+    liveAuditAutoTriggered: false,
+    seoFocusLive: false,
 
     contentLoaded: false,
     contentLoading: false,
@@ -194,6 +198,16 @@
     seoChartDonuts: document.getElementById('seo-chart-donuts'),
     seoTopKeywords: document.getElementById('seo-top-keywords'),
     seoPlaybook: document.getElementById('seo-playbook'),
+    seoLiveStatus: document.getElementById('seo-live-status'),
+    seoLiveCrawlBtn: document.getElementById('seo-live-crawl-btn'),
+    seoLiveAddForm: document.getElementById('seo-live-add-form'),
+    seoLiveUrlInput: document.getElementById('seo-live-url-input'),
+    seoLiveLabelInput: document.getElementById('seo-live-label-input'),
+    seoLiveError: document.getElementById('seo-live-error'),
+    seoLiveSummary: document.getElementById('seo-live-summary'),
+    seoLiveSitemapAlert: document.getElementById('seo-live-sitemap-alert'),
+    seoLiveCards: document.getElementById('seo-live-cards'),
+    seoLiveActions: document.getElementById('seo-live-actions'),
     seoError: document.getElementById('seo-error'),
     seoSearch: document.getElementById('seo-search'),
     seoAreaFilter: document.getElementById('seo-area-filter'),
@@ -1806,6 +1820,244 @@
     state.playbookCards = cards;
   }
 
+  function scoreColorForAudit(score) {
+    if (score >= 80) return '#059669';
+    if (score >= 55) return '#f59e0b';
+    return '#dc2626';
+  }
+
+  function renderRadialScoreSvg(score, size = 56, onDark = false) {
+    const val = Math.max(0, Math.min(100, Number(score) || 0));
+    const r = 22;
+    const c = 2 * Math.PI * r;
+    const dash = ((val / 100) * c).toFixed(1);
+    const stroke = scoreColorForAudit(val);
+    const track = onDark ? 'rgba(255,255,255,0.18)' : '#e6ebf2';
+    const textFill = onDark ? '#ffffff' : '#122136';
+    return `
+      <svg width="${size}" height="${size}" viewBox="0 0 56 56" aria-hidden="true">
+        <circle cx="28" cy="28" r="${r}" fill="none" stroke="${track}" stroke-width="5"></circle>
+        <circle cx="28" cy="28" r="${r}" fill="none" stroke="${stroke}" stroke-width="5" stroke-linecap="round"
+          stroke-dasharray="${dash} ${c.toFixed(1)}" transform="rotate(-90 28 28)"></circle>
+        <text x="28" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="${textFill}">${val}</text>
+      </svg>
+    `;
+  }
+
+  function renderLiveSeoSection(liveAudit) {
+    if (!els.seoLiveSummary || !els.seoLiveCards || !els.seoLiveActions) return;
+    const summary = liveAudit?.summary || {};
+    const audits = Array.isArray(liveAudit?.audits) ? liveAudit.audits : [];
+    const recs = Array.isArray(liveAudit?.recommendations) ? liveAudit.recommendations : [];
+    const sitemap = liveAudit?.sitemapSummary || null;
+
+    if (els.seoLiveStatus && !state.liveAuditCrawling) {
+      els.seoLiveStatus.textContent = summary.lastCrawledAt
+        ? `Último rastreo: ${formatDateEc(summary.lastCrawledAt)} · ${audits.length} páginas`
+        : `${summary.targetsCount || 8} URLs listas para auditar`;
+    }
+
+    const avgScore = summary.avgScore || 0;
+    const schemaCount = audits.filter((a) => Array.isArray(a.schemaTypes) && a.schemaTypes.length > 0).length;
+    const sitemapHealthText = sitemap
+      ? sitemap.brokenUrls?.length
+        ? `${sitemap.brokenUrls.length} rutas 404`
+        : `${sitemap.posgradoUrlsCount} URLs OK`
+      : 'Sin revisar';
+
+    els.seoLiveSummary.innerHTML = `
+      <div class="live-gauge-card">
+        ${renderRadialScoreSvg(avgScore, 60, true)}
+        <div class="live-gauge-meta">
+          <strong>Salud Técnica UCG</strong>
+          <span>${audits.length ? `Promedio /100 en ${audits.length} URLs vivas` : 'Esperando primer rastreo'}</span>
+        </div>
+      </div>
+      <div class="live-stat-tile">
+        <span>Páginas auditadas</span>
+        <strong>${formatInt(audits.length)} / ${formatInt(summary.targetsCount || audits.length)}</strong>
+        <small>Incluye casagrande.edu.ec/posgrados</small>
+      </div>
+      <div class="live-stat-tile ${summary.criticalCount > 0 ? 'is-danger' : ''}">
+        <span>Hallazgos Críticos / Altos</span>
+        <strong>${formatInt(summary.criticalCount || 0)} · ${formatInt(summary.highCount || 0)}</strong>
+        <small>${formatInt(summary.mediumCount || 0)} mejoras recomendadas</small>
+      </div>
+      <div class="live-stat-tile ${sitemap?.brokenUrls?.length ? 'is-danger' : ''}">
+        <span>Sitemap Oficial EC</span>
+        <strong>${escapeHtml(sitemapHealthText)}</strong>
+        <small>${sitemap ? `${sitemap.posgradoUrlsCount} posgrados indexados` : 'Verifica /sitemap.xml'}</small>
+      </div>
+      <div class="live-stat-tile">
+        <span>Cobertura JSON-LD</span>
+        <strong>${audits.length ? `${schemaCount}/${audits.length}` : '—'}</strong>
+        <small>Schema Course / Organization</small>
+      </div>
+    `;
+
+    if (els.seoLiveSitemapAlert) {
+      if (sitemap?.brokenUrls?.length) {
+        els.seoLiveSitemapAlert.hidden = false;
+        els.seoLiveSitemapAlert.innerHTML = `
+          <strong>⚠ Sitemap desactualizado en ${escapeHtml(sitemap.origin)} (${sitemap.brokenUrls.length} URLs devuelven HTTP ${sitemap.brokenUrls[0].status})</strong>
+          <div>El sitemap oficial lista rutas plurales <code>/posgrados/maestria-...</code> que hoy devuelven error 404, mientras las páginas activas viven en singular <code>/posgrado/...</code>. Conviene corregir con redirecciones 301 o regenerar el sitemap.</div>
+          <div class="live-sitemap-urls">
+            ${sitemap.brokenUrls.map((b) => `<code>${escapeHtml(b.url)} (${b.status})</code>`).join('')}
+          </div>
+        `;
+      } else {
+        els.seoLiveSitemapAlert.hidden = true;
+        els.seoLiveSitemapAlert.innerHTML = '';
+      }
+    }
+
+    if (!audits.length) {
+      els.seoLiveCards.innerHTML = '<div class="kanban-empty">Presiona "Escanear páginas en vivo" para analizar https://www.casagrande.edu.ec/posgrados y las fichas oficiales en tiempo real.</div>';
+    } else {
+      els.seoLiveCards.innerHTML = audits.map((a) => {
+        const statusOk = a.statusCode >= 200 && a.statusCode < 300;
+        const hCheckCls = a.h1Count === 1 && a.h2Count >= 2 ? '' : a.h1Count === 0 ? 'is-bad' : 'is-warn';
+        const metaCheckCls = a.metaDescLength >= 100 && a.metaDescLength <= 170 ? '' : a.metaDescLength === 0 ? 'is-bad' : 'is-warn';
+        const schemaCheckCls = a.schemaTypes?.some((t) => /course|itemlist|educational/i.test(t))
+          ? ''
+          : a.schemaTypes?.length
+            ? 'is-warn'
+            : 'is-bad';
+        const canonCls = a.canonical ? '' : 'is-bad';
+        const linksCls = a.role === 'program' || a.internalPosgradoLinks >= 3 ? '' : 'is-bad';
+        const topIssues = (a.issues || []).slice(0, 3);
+
+        return `
+          <article class="live-page-card">
+            <div class="live-page-top">
+              <div>
+                <div class="live-page-title">${escapeHtml(a.label || a.title || a.url)}</div>
+                <a class="live-page-url" href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.url)} ↗</a>
+              </div>
+              ${renderRadialScoreSvg(a.score, 50, false)}
+            </div>
+            <div class="live-checks-row">
+              <span class="live-check-pill ${statusOk ? '' : 'is-bad'}">HTTP ${a.statusCode || 0}${a.responseMs ? ` · ${a.responseMs}ms` : ''}</span>
+              <span class="live-check-pill ${metaCheckCls}">Meta ${a.metaDescLength || 0}ch</span>
+              <span class="live-check-pill ${hCheckCls}">H1:${a.h1Count || 0} · H2:${a.h2Count || 0}</span>
+              <span class="live-check-pill ${canonCls}">${a.canonical ? 'Canonical ✓' : 'Sin Canonical'}</span>
+              <span class="live-check-pill ${schemaCheckCls}">${a.schemaTypes?.length ? escapeHtml(a.schemaTypes.slice(0, 2).join(', ')) : 'Sin JSON-LD'}</span>
+              <span class="live-check-pill ${linksCls}">Links SSR: ${a.internalPosgradoLinks || 0}</span>
+            </div>
+            ${topIssues.length ? `<ul class="live-issues-list">
+              ${topIssues.map((iss) => `
+                <li class="sev-${escapeHtml(iss.severity || 'medium')}">
+                  <strong>${escapeHtml(iss.title)}</strong>
+                  <div class="table-sub">${escapeHtml(iss.evidence || '')}</div>
+                </li>
+              `).join('')}
+            </ul>` : '<div class="table-sub">Sin hallazgos técnicos relevantes en el rastreo SSR.</div>'}
+            <div class="live-page-foot">
+              <button type="button" class="text-btn" data-live-recrawl="${escapeHtml(a.url)}">↻ Re-auditar</button>
+              ${!a.isDefault ? `<button type="button" class="text-btn" style="color:#b91c1c;" data-live-remove="${escapeHtml(a.url)}">Eliminar</button>` : `<span class="table-sub">${formatInt(a.wordCount || 0)} palabras SSR</span>`}
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    if (!recs.length) {
+      els.seoLiveActions.innerHTML = '<div class="kanban-empty">Las recomendaciones accionables aparecerán automáticamente al completar el primer rastreo en vivo.</div>';
+    } else {
+      els.seoLiveActions.innerHTML = recs.map((rec) => `
+        <article class="live-action-card tone-${escapeHtml(rec.priorityTone || 'high')}">
+          <div class="playbook-card-top">
+            <span class="badge ${rec.priorityTone === 'crit' ? 'badge-warn' : rec.priorityTone === 'high' ? 'badge-retell' : 'badge-ok'}">${escapeHtml(rec.priority)}</span>
+            <span class="badge badge-web">${escapeHtml(rec.channel)}</span>
+          </div>
+          <h4>${escapeHtml(rec.title)}</h4>
+          <div class="live-action-impact">${escapeHtml(rec.impact)}</div>
+          <ol class="playbook-steps">
+            ${(rec.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join('')}
+          </ol>
+          <div class="playbook-actions">
+            ${rec.programSlug ? `<button type="button" class="btn btn-primary btn-sm" data-live-draft-program="${escapeHtml(rec.programSlug)}" data-live-draft-kw="${escapeHtml(rec.keyword || '')}">✍️ Crear guía optimizada →</button>` : ''}
+            ${rec.aiQuestion ? `<button type="button" class="btn btn-ai btn-sm" data-live-ai-q="${escapeHtml(rec.aiQuestion)}">✨ Preguntar a IA</button>` : ''}
+          </div>
+        </article>
+      `).join('');
+    }
+  }
+
+  async function crawlLiveSeo({ urls = null, checkSitemap = true } = {}) {
+    if (state.liveAuditCrawling) return;
+    state.liveAuditCrawling = true;
+    const prevText = els.seoLiveCrawlBtn?.textContent;
+    if (els.seoLiveCrawlBtn) {
+      els.seoLiveCrawlBtn.disabled = true;
+      els.seoLiveCrawlBtn.textContent = 'Rastreando páginas reales…';
+    }
+    if (els.seoLiveStatus) els.seoLiveStatus.textContent = 'Analizando HTML en vivo…';
+    if (els.seoLiveError) els.seoLiveError.hidden = true;
+
+    try {
+      const res = await apiRequest('/api/public/admin/seo/crawl', {
+        method: 'POST',
+        body: JSON.stringify({ urls, checkSitemap })
+      });
+      state.liveAudit = res.liveAudit || null;
+      renderLiveSeoSection(state.liveAudit);
+      showToast(`Auditoría en vivo completada (${state.liveAudit?.audits?.length || 0} páginas)`, 'ok');
+    } catch (err) {
+      if (els.seoLiveError) {
+        els.seoLiveError.textContent = `No pudimos completar el rastreo en vivo (${err.message}).`;
+        els.seoLiveError.hidden = false;
+      }
+      if (els.seoLiveStatus) els.seoLiveStatus.textContent = 'Error en rastreo en vivo';
+    } finally {
+      state.liveAuditCrawling = false;
+      if (els.seoLiveCrawlBtn) {
+        els.seoLiveCrawlBtn.disabled = false;
+        els.seoLiveCrawlBtn.textContent = prevText || '🔍 Escanear páginas en vivo';
+      }
+    }
+  }
+
+  async function handleAddLiveTarget(event) {
+    event?.preventDefault();
+    const rawUrl = els.seoLiveUrlInput?.value.trim() || '';
+    const label = els.seoLiveLabelInput?.value.trim() || '';
+    if (!rawUrl) return;
+    if (els.seoLiveError) els.seoLiveError.hidden = true;
+    if (els.seoLiveStatus) els.seoLiveStatus.textContent = 'Agregando y auditando URL…';
+
+    try {
+      const res = await apiRequest('/api/public/admin/seo/targets', {
+        method: 'POST',
+        body: JSON.stringify({ url: rawUrl, label, crawlNow: true })
+      });
+      state.liveAudit = res.liveAudit || null;
+      renderLiveSeoSection(state.liveAudit);
+      if (els.seoLiveAddForm) els.seoLiveAddForm.reset();
+      showToast(`URL agregada y auditada: ${res.addedUrl || rawUrl}`, 'ok');
+    } catch (err) {
+      if (els.seoLiveError) {
+        els.seoLiveError.textContent = err.message || 'No pudimos auditar esa URL.';
+        els.seoLiveError.hidden = false;
+      }
+      if (els.seoLiveStatus) els.seoLiveStatus.textContent = 'Revisa la URL ingresada';
+    }
+  }
+
+  async function handleRemoveLiveTarget(targetUrl) {
+    if (!targetUrl) return;
+    try {
+      const res = await apiRequest(`/api/public/admin/seo/targets?url=${encodeURIComponent(targetUrl)}`, {
+        method: 'DELETE'
+      });
+      state.liveAudit = res.liveAudit || null;
+      renderLiveSeoSection(state.liveAudit);
+      showToast('URL retirada de la auditoría en vivo');
+    } catch (err) {
+      showToast(err.message || 'No se pudo retirar la URL', 'err');
+    }
+  }
+
   function renderSeoSection() {
     if (!state.seoData) return;
     const rows = state.seoRows;
@@ -1839,6 +2091,7 @@
     renderSeoDonutsChart(progRows);
     renderSeoTopKeywords(progRows);
     renderSeoPlaybook(progRows);
+    renderLiveSeoSection(state.liveAudit);
 
     const visible = getFilteredSeoRows();
     const selCount = state.seoSelectedIds.size;
@@ -1938,11 +2191,16 @@
 
       const data = seoRes.value;
       state.seoData = data;
+      state.liveAudit = data.liveAudit || null;
       state.seoRows = buildMergedSeoRows(data);
       state.seoLoaded = true;
       renderSeoSection();
       if (els.seoSyncStatus) {
         els.seoSyncStatus.textContent = `Ventana ${data.start} a ${data.end} · ${state.seoRows.length} páginas`;
+      }
+      if (state.liveAudit && (!state.liveAudit.audits || state.liveAudit.audits.length === 0) && !state.liveAuditAutoTriggered) {
+        state.liveAuditAutoTriggered = true;
+        crawlLiveSeo({ checkSitemap: true });
       }
     } catch (err) {
       if (els.seoError) {
@@ -1955,11 +2213,13 @@
     }
   }
 
-  async function runSeoAnalysis(event) {
+  async function runSeoAnalysis(event, forceFocusLive = false) {
     event?.preventDefault();
     if (!els.seoFindingsBox) return;
     const question = els.seoQuestion.value.trim();
     const ids = [...state.seoSelectedIds].slice(0, 100);
+    const focusLive = Boolean(forceFocusLive || state.seoFocusLive);
+    state.seoFocusLive = false;
     const prev = els.seoAnalyzeBtn.textContent;
     els.seoAnalyzeBtn.disabled = true;
     els.seoAnalyzeBtn.textContent = 'Analizando evidencia…';
@@ -1970,7 +2230,8 @@
         body: JSON.stringify({
           days: state.seoDays,
           ids,
-          question
+          question,
+          focusLive
         })
       });
 
@@ -1978,15 +2239,18 @@
       const modeBadge = res.mode === 'modelo'
         ? '<span class="badge badge-ok">Diagnóstico Claude IA</span>'
         : '<span class="badge badge-warn">Resumen descriptivo verificado</span>';
+      const liveBadge = res.liveAuditIncluded
+        ? ' <span class="badge badge-retell">+ Rastreo en Vivo</span>'
+        : '';
 
       if (!findings.length) {
-        els.seoFindingsBox.innerHTML = `${modeBadge}<div class="kanban-empty">No se encontraron suficientes métricas registradas para responder esa pregunta en la selección actual.</div>`;
+        els.seoFindingsBox.innerHTML = `${modeBadge}${liveBadge}<div class="kanban-empty">No se encontraron suficientes métricas registradas para responder esa pregunta en la selección actual.</div>`;
         return;
       }
 
       els.seoFindingsBox.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
-          ${modeBadge}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+          <div>${modeBadge}${liveBadge}</div>
           <span class="table-sub">${res.start || ''} a ${res.end || ''}</span>
         </div>
         ${findings.map((f) => `
@@ -3002,10 +3266,38 @@
       }
     });
 
+    els.seoLiveCrawlBtn?.addEventListener('click', () => crawlLiveSeo({ checkSitemap: true }));
+    els.seoLiveAddForm?.addEventListener('submit', handleAddLiveTarget);
+    els.seoLiveCards?.addEventListener('click', (e) => {
+      const recrawlBtn = e.target.closest('[data-live-recrawl]');
+      if (recrawlBtn) {
+        crawlLiveSeo({ urls: [recrawlBtn.dataset.liveRecrawl], checkSitemap: true });
+        return;
+      }
+      const removeBtn = e.target.closest('[data-live-remove]');
+      if (removeBtn) {
+        handleRemoveLiveTarget(removeBtn.dataset.liveRemove);
+      }
+    });
+    els.seoLiveActions?.addEventListener('click', (e) => {
+      const draftBtn = e.target.closest('[data-live-draft-program]');
+      if (draftBtn) {
+        jumpToContentProgram(draftBtn.dataset.liveDraftProgram, draftBtn.dataset.liveDraftKw || '');
+        return;
+      }
+      const aiBtn = e.target.closest('[data-live-ai-q]');
+      if (aiBtn) {
+        if (els.seoQuestion) els.seoQuestion.value = aiBtn.dataset.liveAiQ || '';
+        runSeoAnalysis(null, true);
+        els.seoFindingsBox?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+
     document.querySelectorAll('[data-seo-q]').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (els.seoQuestion) els.seoQuestion.value = btn.dataset.seoQ || '';
-        runSeoAnalysis();
+        const focusLive = btn.dataset.seoFocusLive === 'true';
+        runSeoAnalysis(null, focusLive);
       });
     });
     els.seoAiForm?.addEventListener('submit', runSeoAnalysis);
