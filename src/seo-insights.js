@@ -138,6 +138,13 @@ function fact(row, key, days) {
   return subject+' · '+definitions[key]+': '+value+period+'.';
 }
 
+function evidenceReference(row, metric, days) {
+  const reference = {id:row.id,metric,statement:fact(row,metric,days)};
+  const keyword = search.has(metric) ? row.searchWindow.keyword : demand.has(metric) ? row.keyword : null;
+  if (keyword) reference.keyword = keyword;
+  return reference;
+}
+
 function questionMetrics(question) {
   const q = normalized(question);
   const patterns = [
@@ -166,8 +173,9 @@ function fallback(rows, days, reason, focus, named = new Set()) {
     const row = ranked[0];
     const compared = named.size && demand.has(key) ? [...named].map(word=>ranked.find(r=>r.keyword===word)).filter(Boolean) : [row];
     compared.forEach(r=>covered.add(r.id));
+    const references = compared.map(row=>evidenceReference(row,key,days));
     findings.push({title:definitions[key][0].toUpperCase()+definitions[key].slice(1),
-      interpretation:compared.map(r=>fact(r,key,days)).join(' '),
+      interpretation:references.map(ref=>ref.statement).join(' '),references,
       nextStep:demand.has(key) ? 'Compara esta consulta con el contenido y la intención de búsqueda de la página.' : 'Abre el detalle de la página y contrasta este indicador con las otras etapas del recorrido.',
       evidenceIds:[...new Set(compared.map(r=>r.id))]});
     if (findings.length === 3) break;
@@ -237,10 +245,11 @@ export async function buildSeoInsights(env, evidence, question = '') {
         return range.start+'/'+range.end;
       });
       if (new Set(windows).size > 1) continue;
-      const statements = refs.map((ref,i)=>fact(cited[i],ref.metric,days));
+      const references = refs.map((ref,i)=>evidenceReference(cited[i],ref.metric,days));
+      const statements = references.map(ref=>ref.statement);
       refs.forEach((ref,i)=>{if (demand.has(ref.metric)) citedTerms.add(cited[i].keyword)});
       findings.push({title,interpretation: [...new Set(statements)].join(' ')+' Hipótesis para investigar: '+hypothesis,nextStep,
-        evidenceIds:[...new Set(refs.map(ref=>ref.id))]});
+        references,evidenceIds:[...new Set(refs.map(ref=>ref.id))]});
     }
     const expectedTerms = fallbackRows.filter(row=>named.has(row.keyword) && focus.some(key=>demand.has(key) && row.metrics[key] !== undefined));
     if (findings.length && expectedTerms.every(row=>citedTerms.has(row.keyword))) return {mode:'modelo',reason:null,findings};

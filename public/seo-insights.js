@@ -6,6 +6,7 @@
   const usd = new Intl.NumberFormat("es-EC", {style:"currency",currency:"USD"});
   const measured = value => typeof value === "number" && Number.isFinite(value);
   const fold = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  const counted = (n, singular, plural) => formatter.format(n) + " " + (n === 1 ? singular : plural);
   const typeName = row => row.kind === "guia" ? "Guía" : "Ficha de maestría";
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -82,9 +83,9 @@
       const keywords = new Set(rows.flatMap(row => (row.keywords?.length ? row.keywords : [{keyword:row.keyword,searchVolume:row.metrics.searchVolume}]).filter(k=>k.keyword && measured(k.searchVolume)).map(k=>fold(k.keyword))));
       const top = rows.reduce((best,row) => row.keyword && measured(row.metrics.searchVolume) && (!best || row.metrics.searchVolume > best.metrics.searchVolume) ? row : best, null);
       const entries = [
-        [rows.length, "Páginas para investigar", rows.filter(r=>r.kind==="guia").length + " guías · " + rows.filter(r=>r.kind==="programa").length + " fichas"],
-        staff ? [measuredViews.length ? formatter.format(measuredViews.reduce((n,r)=>n+r.metrics.views,0)) : "Sin dato", "Vistas registradas", measuredViews.length + " páginas con medición · " + period.value + " días"] : [top ? formatter.format(top.metrics.searchVolume) : "Sin dato","Mayor demanda mensual",top ? "Consulta · "+top.keyword : "Sin estimaciones de volumen"],
-        [keywords.size, "Consultas con volumen", "Consultas distintas vinculadas a estas páginas"]
+        [rows.length, rows.length === 1 ? "Página para investigar" : "Páginas para investigar", counted(rows.filter(r=>r.kind==="guia").length, "guía", "guías") + " · " + counted(rows.filter(r=>r.kind==="programa").length, "ficha", "fichas")],
+        staff ? [measuredViews.length ? formatter.format(measuredViews.reduce((n,r)=>n+r.metrics.views,0)) : "Sin dato", "Vistas registradas", counted(measuredViews.length,"página con medición","páginas con medición") + " · " + period.value + " días"] : [top ? formatter.format(top.metrics.searchVolume) : "Sin dato","Mayor demanda mensual",top ? "Consulta · "+top.keyword : "Sin estimaciones de volumen"],
+        [keywords.size, keywords.size === 1 ? "Consulta con volumen" : "Consultas con volumen", "Términos distintos vinculados a las páginas"]
       ];
       get("summary").replaceChildren(...entries.map(([value,label,hint])=>{
         const box = element("div");box.append(element("span","si-stat-label",label),element("strong",null,value),element("small",null,hint));return box;
@@ -113,7 +114,7 @@
     }
     function list() {
       const start = page*pageSize;
-      get("count").textContent = visible.length ? `Páginas ${start+1}–${Math.min(start+pageSize,visible.length)} de ${visible.length}.` : "No hay páginas que coincidan con los filtros.";
+      get("count").textContent = !visible.length ? "No hay páginas que coincidan con los filtros." : start+1===visible.length ? `Página ${start+1} de ${visible.length}.` : `Páginas ${start+1}–${Math.min(start+pageSize,visible.length)} de ${visible.length}.`;
       get("list").replaceChildren(...visible.slice(start,start+pageSize).map(row=>{
         const item = button("", "si-row", ()=>selectRow(row,true));
         item.setAttribute("aria-pressed", String(row === current));
@@ -191,7 +192,7 @@
           }
           if (i===2 && row.keywords?.length) {
             const more=element("details","si-keywords");
-            more.append(element("summary",null,"Ver consultas y fuentes ("+row.keywords.length+")"));
+            more.append(element("summary",null,row.keywords.length===1 ? "Ver consulta y fuente (1)" : "Ver consultas y fuentes ("+row.keywords.length+")"));
             for (const k of row.keywords) {
               const record=element("div","si-observation");
               record.append(element("strong",null,k.keyword),
@@ -231,20 +232,28 @@
       for (const finding of findings) {
         const card=element("article","si-finding");card.append(element("h5",null,finding.title),element("p",null,finding.interpretation));
         if (finding.nextStep) card.append(element("h6",null,"Siguiente paso"),element("p",null,finding.nextStep));
-        const ids=new Set(Array.isArray(finding.evidenceIds)?finding.evidenceIds:[]);
+        const references = Array.isArray(finding.references)
+          ? finding.references.filter(ref => typeof ref?.id === "string" && typeof ref.statement === "string" && ref.statement.trim())
+          : [];
+        const ids=new Set(references.length ? references.map(ref=>ref.id) : (Array.isArray(finding.evidenceIds)?finding.evidenceIds:[]));
         const sources=scope().filter(r=>ids.has(r.id));
         if (sources.length) {
           const cites=element("div","si-cites");cites.append(element("strong",null,"Revisar evidencia"));
           for (const row of sources) {
             const citation=element("details","si-keywords");
             citation.append(element("summary","si-citation",row.title));
-            for (let i=0;i<groups.length;i++) {
-              if (!staff && i<2) continue;
-              const [name,fields]=groups[i];
-              const values=fields.filter(([key])=>measured(row.metrics[key])).map(([key,label])=>label+" · "+amount(key,row.metrics[key]));
-              if (values.length) citation.append(element("strong","si-type",name),element("p",null,values.join(" | ")));
+            if (references.length) {
+              const statements = new Set(references.filter(ref=>ref.id===row.id).map(ref=>ref.statement));
+              for (const text of statements) citation.append(element("p",null,text));
+            } else {
+              for (let i=0;i<groups.length;i++) {
+                if (!staff && i<2) continue;
+                const [name,fields]=groups[i];
+                const values=fields.filter(([key])=>measured(row.metrics[key])).map(([key,label])=>label+" · "+amount(key,row.metrics[key]));
+                if (values.length) citation.append(element("strong","si-type",name),element("p",null,values.join(" | ")));
+              }
+              if (row.keyword) citation.append(element("p","si-hint","Consulta de referencia · "+row.keyword));
             }
-            if (row.keyword) citation.append(element("p","si-hint","Consulta de referencia · "+row.keyword));
             const link=pageLink(row);if(link)citation.append(link);
             citation.append(button("Investigar esta página","si-secondary",()=>selectRow(row,true)));
             cites.append(citation);

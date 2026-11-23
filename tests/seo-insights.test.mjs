@@ -113,7 +113,7 @@ test('una referencia de término secundario usa su propio volumen y fecha inclus
   const fetch=t.mock.method(globalThis,'fetch',async(_url,opts)=>{
     const rows=JSON.parse(JSON.parse(opts.body).messages[0].content).filas;
     assert.ok(rows[0].keywords.some(k=>k.keyword===secondary && k.metrics.searchVolume===10));
-    return response([{...finding,references:keywords.map(keyword=>({id:row.id,metric:'searchVolume',keyword}))}]);
+    return response([{...finding,references:keywords.map(keyword=>({id:row.id,metric:'searchVolume',keyword,statement:'Cifra inventada por el modelo'}))}]);
   });
   const ask='¿Qué volumen tiene «'+secondary+'»?';
   for (const provider of [{},env]) {
@@ -121,12 +121,16 @@ test('una referencia de término secundario usa su propio volumen y fecha inclus
     assert.equal(result.mode,provider===env?'modelo':'descriptivo');
     assert.match(result.findings[0].interpretation,/precio».+estimadas: 10, observación del 2026-11-22/);
     assert.doesNotMatch(result.findings[0].interpretation,/720|2026-10-01/);
+    assert.deepEqual(result.findings[0].references,[{id:row.id,metric:'searchVolume',keyword:secondary,
+      statement:'«'+secondary+'» (Educación) · búsquedas mensuales estimadas: 10, observación del 2026-11-22.'}]);
   }
   keywords=[primary,secondary];
   const compare='Compara el volumen de «'+primary+'» y «'+secondary+'»';
   const result=await buildSeoInsights(env,data,compare);
   assert.equal(result.mode,'modelo');
   assert.match(result.findings[0].interpretation,/estimadas: 720, observación del 2026-10-01.+precio».+estimadas: 10, observación del 2026-11-22/);
+  assert.deepEqual(result.findings[0].references.map(r=>r.keyword),[primary,secondary]);
+  assert.deepEqual(result.findings[0].evidenceIds,[row.id]);
   keywords=[primary];
   const invalid=await buildSeoInsights(env,data,ask);
   assert.equal(invalid.mode,'descriptivo');
