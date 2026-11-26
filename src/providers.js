@@ -90,7 +90,7 @@ export async function aiText(env,system,user,maxTokens=600,{timeoutMs=16000,effo
     headers['x-api-key']=secret;headers['anthropic-version']='2023-06-01';
     body={model,max_tokens:maxTokens,system,messages:[{role:'user',content:user}]};
     if (model==='claude-haiku-5-5') {
-      body.max_tokens=Math.min(8192,maxTokens+640);
+      body.max_tokens=Math.min(12000,maxTokens+640);
       body.output_config={effort:effort || (maxTokens>=1400?'medium':'low')};
     }
   } else if(vendor==='google'){

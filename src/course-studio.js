@@ -1787,18 +1787,18 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
   if (aiVendor) {
     const systemPrompt = [
       'Eres diseñador pedagógico y director de animaciones matemáticas estilo 3Blue1Brown para UCG Aula Interactiva IA (Universidad Casa Grande, Guayaquil, Ecuador).',
-      'Tu misión es crear cursos visuales en español claro, cálido y riguroso que privilegien la intuición geométrica y metáforas visuales antes de la fórmula.',
-      `Usa EXCLUSIVAMENTE estos 6 renderers exactos: ${RENDERERS.join(', ')}.`,
-      'Parámetros canónicos por renderer:',
+      'Crea un curso visual en español claro y ejecutivo que privilegie intuición geométrica antes de la fórmula.',
+      `Usa EXCLUSIVAMENTE estos 6 renderers y varía los renderers entre lecciones: ${RENDERERS.join(', ')}.`,
+      'Parámetros canónicos exactos por renderer:',
       '- vector_space: a, b, c, d',
       '- calculus_curve: x0, h, n (sceneState.mode en derivative | integral | gradient)',
       '- neural_network: w1, w2, bias, inputA (sceneState.stage en forward | boundary | loss | backprop)',
-      '- probability_dist: prior, sensitivity, falsePos (mode bayes) o mu, sigma (mode gaussian)',
+      '- probability_dist: prior, sensitivity, falsePos (sceneState.mode bayes) o mu, sigma (sceneState.mode gaussian)',
       '- compound_growth: capital, rate, years',
-      '- system_flow: throughput, defense, latency',
-      'Si recibes datos de una maestría UCG, ancla ejemplos y terminología únicamente en esos hechos verificados (no inventes precios si inversion es null).',
-      'Responde EXCLUSIVAMENTE con un objeto JSON válido con las claves: title, subtitle, renderer, lessons (array de ' + lessonCount + ' lecciones).',
-      'Cada lección debe incluir: id, title, summary, renderer, equation (LaTeX válido), explorePrompt, params ([{id,label,min,max,step,default,unit}]), beats (4 a 5 objetos {t,title,caption,equation,mood,speechText,sceneState} con mood en neutral|curious|excited|emphatic y speechText natural para voz en español), quiz ({question,options(4),correctIndex,explanation}).',
+      '- system_flow: throughput, defense, latency (sceneState.activeNode 0..5)',
+      'Si recibes datos de una maestría UCG, ancla ejemplos solo en esos hechos verificados (no inventes precios si inversion es null).',
+      'Responde SOLO con JSON válido puro (sin ```json ni texto extra): {"title":"<=80 chars","subtitle":"<=140 chars","renderer":"...","lessons":[...]} con exactamente ' + lessonCount + ' lecciones.',
+      'Mantén el JSON compacto para no exceder tokens: cada lección con id, title, summary (1 frase), renderer, equation (LaTeX), explorePrompt (1 frase), params (2-3 objetos {id,label,min,max,step,default,unit}), exactamente 4 beats ({t,title,caption (<=16 palabras),equation,mood (neutral|curious|excited|emphatic),speechText (22-38 palabras naturales en español),sceneState}), y quiz ({question,options(4 cortas),correctIndex,explanation (1 frase)}).',
     ].join('\n');
 
     const userPrompt = JSON.stringify({
@@ -1820,7 +1820,7 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
     });
 
     try {
-      const aiRaw = await aiText(env, systemPrompt, userPrompt, 4800, { timeoutMs: 55000, effort: 'low' });
+      const aiRaw = await aiText(env, systemPrompt, userPrompt, 8000, { timeoutMs: 55000, effort: 'low' });
       rawCourse = parseAiCourseJson(aiRaw);
       if (rawCourse && Array.isArray(rawCourse.lessons) && rawCourse.lessons.length) {
         mode = aiVendor;
