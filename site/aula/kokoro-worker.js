@@ -211,9 +211,10 @@ function spanishRulesToIpa(clauseText) {
 async function phonemizeClause(clauseText) {
   if (espeakWorker && typeof espeakWorker.synthesize_ipa === 'function') {
     try {
-      const ipa = await espeakWorker.synthesize_ipa(clauseText, '');
-      if (ipa && String(ipa).trim()) {
-        return String(ipa);
+      const res = await espeakWorker.synthesize_ipa(clauseText, '');
+      const ipaStr = typeof res === 'string' ? res : (res && typeof res.ipa === 'string' ? res.ipa : '');
+      if (ipaStr && ipaStr.trim()) {
+        return ipaStr;
       }
     } catch {
       // fall through to deterministic Spanish G2P rules

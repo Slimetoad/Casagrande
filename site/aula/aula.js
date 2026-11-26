@@ -3,7 +3,7 @@ import {
   createAvatarKokoroController,
   VOICE_PROFILES,
   DEFAULT_AVATAR_URL
-} from './avatar-kokoro.js';
+} from './avatar-kokoro.js?v=kokoro-es-2';
 
 const DEFAULT_API_BASE = 'https://casagrande-posgrados-production.up.railway.app';
 

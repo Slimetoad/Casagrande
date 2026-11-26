@@ -339,7 +339,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     if (destroyed || typeof Worker === 'undefined') return null;
     if (worker) return worker;
 
-    const workerUrl = new URL('./kokoro-worker.js', import.meta.url);
+    const workerUrl = new URL('./kokoro-worker.js?v=kokoro-es-2', import.meta.url);
     worker = new Worker(workerUrl, { type: 'module' });
 
     worker.addEventListener('message', (event) => {
