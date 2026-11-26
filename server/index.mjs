@@ -22,6 +22,7 @@ import {
 import { marketSnapshot } from '../src/openseo-ecuador.js';
 import { ensurePlan, publicEditorial } from '../src/editorial-engine.js';
 import { draftEditorialArticle, editorialProposal, institutionalUrl } from '../src/editorial-draft.js';
+import { generateInteractiveCourse, getCourseById, listCourses } from '../src/course-studio.js';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const PUBLIC_DIR = resolve(ROOT_DIR, 'public');
@@ -2068,6 +2069,62 @@ async function tryStaticAsset(pathname, method) {
   }
 }
 
+async function routePublicCourses(request, env, path) {
+  if (path === '/api/public/courses') {
+    if (!['GET', 'HEAD'].includes(request.method)) {
+      return crmJson({ error: 'Método no permitido.' }, 405);
+    }
+    const courses = await listCourses(env.DB);
+    const catalogPrograms = programs.map(p => ({
+      slug: p.slug,
+      title: p.title,
+      shortTitle: p.shortTitle,
+      area: p.area,
+      mode: p.mode || null,
+      duration: p.duration || null
+    }));
+    const res = crmJson({ ok: true, total: courses.length, courses, programs: catalogPrograms });
+    return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
+  }
+
+  if (path === '/api/public/courses/generate') {
+    if (request.method !== 'POST') {
+      return crmJson({ error: 'Método no permitido.' }, 405);
+    }
+    if (!env.DB) return crmJson({ error: 'Base de datos no disponible.' }, 503);
+    const body = await readJsonBody(request);
+    if (!body) return crmJson({ error: 'Envía un objeto JSON válido.' }, 400);
+    try {
+      const result = await generateInteractiveCourse(env.DB, env, body);
+      return crmJson(result, 201);
+    } catch (err) {
+      const status = err?.status && Number.isInteger(err.status) ? err.status : 500;
+      return crmJson({ error: err?.message || 'No pudimos generar el curso interactivo.' }, status);
+    }
+  }
+
+  const courseMatch = path.match(/^\/api\/public\/courses\/([^/]+)$/);
+  if (courseMatch) {
+    if (!['GET', 'HEAD'].includes(request.method)) {
+      return crmJson({ error: 'Método no permitido.' }, 405);
+    }
+    let courseId;
+    try {
+      courseId = decodeURIComponent(courseMatch[1]);
+    } catch {
+      return crmJson({ error: 'Identificador de curso no válido.' }, 400);
+    }
+    const course = await getCourseById(env.DB, courseId);
+    if (!course) {
+      return crmJson({ error: 'No encontramos ese curso interactivo.' }, 404);
+    }
+    const res = crmJson({ ok: true, course });
+    return request.method === 'HEAD' ? new Response(null, { status: res.status, headers: res.headers }) : res;
+  }
+
+  return crmJson({ error: 'Ruta de Aula IA no encontrada.' }, 404);
+}
+
 export const defaultCtx = {
   waitUntil(p) {
     Promise.resolve(p).catch(err => console.error('waitUntil error:', err));
@@ -2112,6 +2169,11 @@ export async function handleHttpRequest(request, env, ctx = defaultCtx) {
       return crmJson({ error: 'Origen no permitido.' }, 403);
     }
     response = await routePublicAdmin(request, env, url, path);
+  } else if (path === '/api/public/courses' || path.startsWith('/api/public/courses/')) {
+    if (!['GET', 'HEAD'].includes(request.method) && originHeader && !isAllowedOrigin(originHeader, env, url.origin)) {
+      return crmJson({ error: 'Origen no permitido.' }, 403);
+    }
+    response = await routePublicCourses(request, env, path);
   } else if (path === '/robots.txt' && ['GET', 'HEAD'].includes(request.method)) {
     response = handlePublicRobots(url);
     if (request.method === 'HEAD') {

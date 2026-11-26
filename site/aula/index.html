@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="es-EC">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090D16">
+  <title>Aula Interactiva IA · Posgrados Universidad Casa Grande</title>
+  <meta name="description" content="Cualquier tema convertido en una clase visual interactiva estilo 3Blue1Brown con avatar 3D open-source y voz neuronal Kokoro-82M en español.">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="es_EC">
+  <meta property="og:site_name" content="Posgrados · Universidad Casa Grande">
+  <meta property="og:title" content="Aula Interactiva IA · Posgrados UCG">
+  <meta property="og:description" content="Clases visuales interactivas en tiempo real con avatar 3D TalkingHead y voz Kokoro-82M en tu navegador.">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="./aula.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
+
+  <!-- TOP NAVIGATION -->
+  <header class="aula-header">
+    <div class="aula-container header-row">
+      <div class="header-left">
+        <a class="brand-lock" href="../" aria-label="Posgrados Universidad Casa Grande">
+          <img src="../media/ucg-logo-light.png" alt="Universidad Casa Grande" width="144" height="45">
+          <span class="brand-sep" aria-hidden="true"></span>
+          <span class="brand-tag">Aula IA</span>
+        </a>
+        <a class="back-portal-pill" href="../">← Portal Posgrados</a>
+      </div>
+
+      <nav class="header-nav" aria-label="Navegación del Aula IA">
+        <a href="#aula-creator-section">Generador</a>
+        <a href="#galeria-cursos">Biblioteca</a>
+        <a href="../#catalogo">34 Maestrías</a>
+        <a href="../#solicitar">Admisiones</a>
+      </nav>
+
+      <div class="header-right">
+        <div id="api-status-pill" class="status-pill is-loading" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="api-status-text">Conectando estudio…</span>
+        </div>
+        <a class="btn btn-amber btn-sm" href="../#solicitar">Solicitar orientación</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="contenido" tabindex="-1">
+    <!-- ==================== SECTION 1: GENERATOR & CURATED LIBRARY ==================== -->
+    <section id="aula-creator-section" class="creator-section" aria-labelledby="creator-hero-title">
+      <div class="creator-backdrop" aria-hidden="true"></div>
+
+      <div class="aula-container">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <div class="eyebrow">
+              <span class="eyebrow-dot" aria-hidden="true"></span>
+              <span>Estudio Visual 3Blue1Brown · Kokoro-82M + Avatar 3D WebGL</span>
+            </div>
+            <h1 id="creator-hero-title">
+              Cualquier tema convertido en una <em>clase visual interactiva</em> con avatar 3D y voz Kokoro-82M
+            </h1>
+            <p class="hero-lead">
+              Escribe un concepto de matemática, inteligencia artificial, finanzas o derecho. Nuestro estudio genera lecciones interactivas con simulaciones en vivo a 60 FPS, ecuaciones LaTeX, cuestionarios de comprensión y narración neuronal en español.
+            </p>
+
+            <div class="hero-capabilities">
+              <div class="cap-item">
+                <strong>6 motores visuales 60 FPS</strong>
+                <span>Vectores, cálculo, redes neuronales, Bayes, crecimiento y flujos</span>
+              </div>
+              <div class="cap-item">
+                <strong>Voz Kokoro-82M local</strong>
+                <span>WebGPU / WASM privado en navegador + descarga WAV</span>
+              </div>
+              <div class="cap-item">
+                <strong>Avatar 3D Open-Source</strong>
+                <span>TalkingHead GLB con lip-sync + receta MuseTalk / LivePortrait</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="creator-card">
+            <div class="creator-card-head">
+              <h2>Diseña tu clase interactiva</h2>
+              <span>Generación guiada o exploración inmediata</span>
+            </div>
+
+            <form id="creator-form" class="creator-form" novalidate>
+              <label class="field">
+                <span>¿Qué tema quieres dominar hoy?</span>
+                <input
+                  id="creator-topic"
+                  name="topic"
+                  type="text"
+                  required
+                  minlength="2"
+                  maxlength="160"
+                  autocomplete="off"
+                  placeholder="Ej. Transformaciones lineales, Backpropagation, Teorema de Bayes..."
+                >
+              </label>
+
+              <div class="topic-pills-wrap" aria-label="Temas de inspiración rápida">
+                <span class="pills-label">Ideas rápidas:</span>
+                <div class="topic-pills">
+                  <button type="button" class="topic-pill" data-topic="Álgebra Lineal">Álgebra Lineal</button>
+                  <button type="button" class="topic-pill" data-topic="Redes Neuronales">Redes Neuronales</button>
+                  <button type="button" class="topic-pill" data-topic="IA Generativa">IA Generativa</button>
+                  <button type="button" class="topic-pill" data-topic="Cálculo Visual">Cálculo Visual</button>
+                  <button type="button" class="topic-pill" data-topic="Finanzas Corporativas">Finanzas Corporativas</button>
+                  <button type="button" class="topic-pill" data-topic="Derecho Digital">Derecho Digital</button>
+                </div>
+              </div>
+
+              <div class="field-grid-2">
+                <label class="field">
+                  <span>Vincular con Maestría UCG (opcional)</span>
+                  <select id="creator-program" name="programSlug">
+                    <option value="">Clase abierta multidisciplinaria</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>Profundidad pedagógica</span>
+                  <select id="creator-level" name="level">
+                    <option value="Introductorio">Introductorio · Visual desde cero</option>
+                    <option value="Intermedio" selected>Intermedio · Posgrado aplicado</option>
+                    <option value="Avanzado">Avanzado · Rigor matemático</option>
+                    <option value="Ejecutivo">Ejecutivo · Decisiones y estrategia</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="field">
+                <span>Voz del instructor Kokoro-82M (Español)</span>
+                <select id="creator-voice" name="voiceId">
+                  <option value="ef_dora">Dora · Español Natural (Kokoro-82M)</option>
+                  <option value="em_alex">Alex · Español Claro (Kokoro-82M)</option>
+                  <option value="em_santa">Santa · Narrador Profundo (Kokoro-82M)</option>
+                </select>
+              </label>
+
+              <div id="creator-status" class="creator-status" role="status" aria-live="polite" hidden></div>
+
+              <button id="creator-submit" type="submit" class="btn btn-amber btn-lg btn-block">
+                ✨ Crear curso interactivo ahora
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- CURATED + GENERATED GALLERY -->
+        <div id="galeria-cursos" class="gallery-wrap">
+          <div class="gallery-head">
+            <div>
+              <span class="gallery-kicker">Biblioteca Curada &amp; Clases Generadas</span>
+              <h2>Explora una clase interactiva al instante</h2>
+            </div>
+            <div class="gallery-filters" role="group" aria-label="Filtrar cursos">
+              <button type="button" class="filter-chip is-active" data-gallery-filter="all">Todos</button>
+              <button type="button" class="filter-chip" data-gallery-filter="curated">Cursos insignia UCG</button>
+              <button type="button" class="filter-chip" data-gallery-filter="generated">Creados con IA</button>
+            </div>
+          </div>
+
+          <div id="course-gallery" class="course-gallery" aria-live="polite">
+            <div class="gallery-skeleton">Cargando biblioteca interactiva…</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== SECTION 2: 3BLUE1BROWN + AVATAR STUDIO ==================== -->
+    <section id="aula-studio-section" class="studio-section" aria-label="Estudio Interactivo" hidden>
+      <!-- STUDIO TOP BAR -->
+      <div class="studio-topbar">
+        <div class="aula-container studio-topbar-inner">
+          <div class="studio-nav-left">
+            <button id="back-to-gallery-btn" type="button" class="btn btn-dark-ghost btn-sm">
+              ← Biblioteca
+            </button>
+            <div class="studio-titles">
+              <span id="studio-course-title" class="studio-course-title">Curso Interactivo</span>
+              <strong id="studio-lesson-title" class="studio-lesson-title">Lección 1</strong>
+            </div>
+          </div>
+
+          <div id="lesson-pills" class="lesson-pills" role="tablist" aria-label="Lecciones del curso"></div>
+
+          <div class="studio-actions-right">
+            <div class="kokoro-status-box">
+              <span id="kokoro-status-pill" class="kokoro-pill is-idle" role="status" aria-live="polite">
+                <span class="kokoro-dot" aria-hidden="true"></span>
+                <span id="kokoro-status-text">Voz instantánea lista · Kokoro bajo demanda</span>
+              </span>
+              <div id="kokoro-progress-wrap" class="kokoro-progress-wrap" hidden>
+                <div class="kokoro-progress-track">
+                  <div id="kokoro-progress-bar" class="kokoro-progress-bar" style="width: 0%"></div>
+                </div>
+                <span id="kokoro-progress-pct" class="kokoro-progress-pct">0%</span>
+              </div>
+            </div>
+
+            <button id="open-avatar-modal-btn" type="button" class="btn btn-cyan-outline btn-sm">
+              🧬 Avatar &amp; Exportar MP4
+            </button>
+            <a id="studio-program-cta" class="btn btn-amber btn-sm" href="../#solicitar">
+              Admisiones UCG
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- CINEMATIC SPLIT STAGE -->
+      <div class="aula-container studio-body">
+        <div class="studio-stage-grid">
+          <!-- LEFT: 3B1B CANVAS STAGE -->
+          <div class="canvas-stage-card">
+            <div class="canvas-viewport">
+              <canvas id="threeblue-canvas" width="1280" height="720" aria-label="Escenario matemático interactivo"></canvas>
+
+              <div class="stage-overlay-top">
+                <div id="stage-beat-badge" class="stage-beat-badge">Escena 1 / 4</div>
+                <div id="stage-equation" class="stage-equation" aria-live="polite"></div>
+              </div>
+
+              <div class="stage-overlay-bottom">
+                <p id="stage-caption" class="stage-caption" aria-live="polite">
+                  Presiona Reproducir o ajusta los parámetros inferiores para explorar el concepto en tiempo real.
+                </p>
+              </div>
+            </div>
+
+            <!-- TRANSPORT TIMELINE BAR -->
+            <div class="transport-bar" aria-label="Controles de reproducción de la lección">
+              <div class="transport-main-btns">
+                <button id="prev-beat-btn" type="button" class="icon-btn" title="Escena anterior" aria-label="Escena anterior">
+                  ⏮
+                </button>
+                <button id="play-pause-btn" type="button" class="btn btn-amber btn-sm play-btn">
+                  ▶ Reproducir lección
+                </button>
+                <button id="next-beat-btn" type="button" class="icon-btn" title="Siguiente escena" aria-label="Siguiente escena">
+                  ⏭
+                </button>
+              </div>
+
+              <div id="beat-pills" class="beat-pills" role="group" aria-label="Escenas de la lección"></div>
+
+              <label class="speed-control">
+                <span class="sr-only">Velocidad de narración</span>
+                <select id="speed-select" aria-label="Velocidad de narración">
+                  <option value="0.85">0.85x</option>
+                  <option value="1" selected>1x</option>
+                  <option value="1.2">1.2x</option>
+                </select>
+              </label>
+            </div>
+
+            <!-- INTERACTIVE PARAMETER CONTROLS -->
+            <div id="params-bar" class="params-bar">
+              <div class="params-bar-head">
+                <div>
+                  <span class="params-kicker">Laboratorio interactivo</span>
+                  <h3>Manipula el modelo en tiempo real</h3>
+                </div>
+                <button id="reset-params-btn" type="button" class="btn btn-dark-ghost btn-sm">
+                  ↺ Restablecer valores
+                </button>
+              </div>
+              <div id="params-sliders" class="params-sliders"></div>
+            </div>
+          </div>
+
+          <!-- RIGHT: 3D AVATAR & KOKORO INSTRUCTOR DOCK -->
+          <aside class="instructor-dock" aria-label="Docente 3D y síntesis de voz">
+            <div class="avatar-card">
+              <div class="avatar-viewport-wrap">
+                <div id="avatar-mount" class="avatar-mount" aria-label="Avatar 3D del instructor"></div>
+                <div class="avatar-hud-top">
+                  <span id="avatar-speaking-badge" class="speaking-badge">
+                    <span class="speaking-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+                    <span id="avatar-speaking-label">En espera</span>
+                  </span>
+                  <span id="avatar-model-badge" class="avatar-model-badge">Avatar 3D</span>
+                </div>
+              </div>
+
+              <div class="avatar-controls">
+                <label class="field-inline">
+                  <span>Voz Kokoro (Español)</span>
+                  <select id="studio-voice-select">
+                    <option value="ef_dora">Dora · Español Natural (Kokoro-82M)</option>
+                    <option value="em_alex">Alex · Español Claro (Kokoro-82M)</option>
+                    <option value="em_santa">Santa · Narrador Profundo (Kokoro-82M)</option>
+                  </select>
+                </label>
+
+                <div class="avatar-btn-stack">
+                  <button id="prepare-kokoro-btn" type="button" class="btn btn-cyan-outline btn-sm btn-block">
+                    Preparar Kokoro-82M (WebGPU/WASM)
+                  </button>
+                  <button id="download-wav-btn" type="button" class="btn btn-dark-ghost btn-sm btn-block">
+                    ⬇ Descargar audio Kokoro (.wav)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div id="explore-prompt-card" class="explore-card">
+              <div class="explore-head">
+                <span class="explore-badge">Explora tú mismo</span>
+                <span id="lesson-renderer-tag" class="renderer-tag">vector_space</span>
+              </div>
+              <p id="explore-prompt" class="explore-prompt">
+                Mueve los deslizadores o arrastra directamente sobre el lienzo para observar cómo cambia la geometría.
+              </p>
+              <p id="lesson-summary-text" class="lesson-summary-text"></p>
+            </div>
+          </aside>
+        </div>
+
+        <!-- BOTTOM LESSON QUIZ CARD -->
+        <section id="lesson-quiz" class="quiz-card" aria-labelledby="quiz-title">
+          <div class="quiz-head">
+            <div>
+              <span class="quiz-kicker">Verificación de intuición</span>
+              <h3 id="quiz-title">Comprueba lo aprendido en esta lección</h3>
+            </div>
+            <button id="next-lesson-btn" type="button" class="btn btn-amber btn-sm">
+              Siguiente lección →
+            </button>
+          </div>
+
+          <p id="quiz-question" class="quiz-question"></p>
+          <div id="quiz-options" class="quiz-options" role="radiogroup" aria-label="Opciones de respuesta"></div>
+          <div id="quiz-feedback" class="quiz-feedback" role="status" aria-live="polite" hidden></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL: OPEN-SOURCE AVATAR & MP4 VIDEO EXPORT -->
+  <div id="avatar-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="avatar-modal-title" hidden>
+    <div class="modal-dialog">
+      <div class="modal-head">
+        <div>
+          <span class="modal-kicker">Pipeline Open-Source UCG</span>
+          <h2 id="avatar-modal-title">Avatar Open-Source &amp; Exportar Video (MuseTalk / LivePortrait)</h2>
+        </div>
+        <button id="close-avatar-modal-btn" type="button" class="icon-btn" aria-label="Cerrar ventana">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="modal-block">
+          <h3>1. Personalizar avatar 3D en tiempo real (TalkingHead / VRM / ReadyPlayerMe)</h3>
+          <p class="modal-desc">
+            El avatar por defecto usa el modelo open-source <code>brunette.glb</code> de TalkingHead con morph targets ARKit/Oculus, o el busto 3D procedural integrado. También puedes cargar cualquier URL pública <code>.glb</code> con licencia abierta.
+          </p>
+
+          <div class="avatar-preset-row">
+            <button id="use-brunette-avatar-btn" type="button" class="btn btn-cyan-outline btn-sm">
+              Usar TalkingHead brunette.glb
+            </button>
+            <button id="use-procedural-avatar-btn" type="button" class="btn btn-dark-ghost btn-sm">
+              Usar busto 3D procedural
+            </button>
+          </div>
+
+          <div class="url-loader-row">
+            <label class="field-url">
+              <span class="sr-only">URL de modelo GLB</span>
+              <input id="custom-avatar-url" type="url" placeholder="https://.../avatar.glb">
+            </label>
+            <button id="apply-avatar-url-btn" type="button" class="btn btn-amber btn-sm">Cargar GLB</button>
+          </div>
+          <div id="avatar-modal-status" class="modal-status" role="status" aria-live="polite" hidden></div>
+        </div>
+
+        <div class="modal-block">
+          <h3>2. Exportar activos para renderizado MP4 fotorrealista offline</h3>
+          <p class="modal-desc">
+            Descarga la pista de audio neuronal Kokoro-82M (<code>.wav</code>) y el guion estructurado con tiempos de escenas y subtítulos (<code>.json</code>) para renderizar un video MP4 con <strong>MuseTalk 1.5</strong> o <strong>LivePortrait</strong> + FFmpeg.
+          </p>
+
+          <div class="export-actions-row">
+            <button id="modal-download-wav-btn" type="button" class="btn btn-amber btn-sm">
+              ⬇ Descargar audio Kokoro (.wav)
+            </button>
+            <button id="modal-download-json-btn" type="button" class="btn btn-cyan-outline btn-sm">
+              ⬇ Descargar guion y timeline (.json)
+            </button>
+          </div>
+
+          <div class="cli-box">
+            <div class="cli-box-head">
+              <span>Comando sugerido (MuseTalk / LivePortrait + FFmpeg)</span>
+              <button id="copy-cli-cmd-btn" type="button" class="btn btn-dark-ghost btn-sm">Copiar comando</button>
+            </div>
+            <pre id="render-cli-cmd" class="cli-code">python3 scripts/render-avatar-lesson.py --course-json curso-ucg.json --audio-wav leccion-ucg.wav --source-image docente.png --output clase-final.mp4 --engine musetalk</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script id="ucg-config" type="application/json">{"apiBase":"https://casagrande-posgrados-production.up.railway.app","voicePhone":"+19124915544"}</script>
+  <script id="catalog-data" type="application/json">[]</script>
+  <script type="module" src="./aula.js"></script>
+</body>
+</html>

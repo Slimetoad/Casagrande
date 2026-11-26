@@ -15,11 +15,13 @@ const __dirname = dirname(__filename);
 const ROOT = resolve(__dirname, '..');
 const SITE_DIR = join(ROOT, 'site');
 const SITE_ADMIN_DIR = join(SITE_DIR, 'admin');
+const SITE_AULA_DIR = join(SITE_DIR, 'aula');
 const SITE_PROGRAM_DIR = join(SITE_DIR, 'program');
 const PUBLIC_DIR = join(ROOT, 'public');
 const PUBLIC_MEDIA_DIR = join(PUBLIC_DIR, 'media');
 const OUT_DIR = join(ROOT, 'dist-pages');
 const OUT_ADMIN_DIR = join(OUT_DIR, 'admin');
+const OUT_AULA_DIR = join(OUT_DIR, 'aula');
 const OUT_CRM_DIR = join(OUT_DIR, 'crm');
 const OUT_MEDIA_DIR = join(OUT_DIR, 'media');
 const OUT_PROGRAM_DIR = join(OUT_DIR, 'program');
@@ -86,6 +88,7 @@ function build() {
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_MEDIA_DIR, { recursive: true });
   mkdirSync(OUT_ADMIN_DIR, { recursive: true });
+  mkdirSync(OUT_AULA_DIR, { recursive: true });
   mkdirSync(OUT_CRM_DIR, { recursive: true });
   mkdirSync(OUT_PROGRAM_DIR, { recursive: true });
   mkdirSync(OUT_PROGRAMAS_DIR, { recursive: true });
@@ -151,10 +154,14 @@ function build() {
   copyFileSync(join(SITE_DIR, 'app.js'), join(OUT_DIR, 'app.js'));
   copyFileSync(join(SITE_ADMIN_DIR, 'admin.css'), join(OUT_ADMIN_DIR, 'admin.css'));
   copyFileSync(join(SITE_ADMIN_DIR, 'admin.js'), join(OUT_ADMIN_DIR, 'admin.js'));
+  for (const aulaFile of ['aula.css', 'aula.js', 'engine-3b1b.js', 'avatar-kokoro.js', 'kokoro-worker.js']) {
+    copyFileSync(join(SITE_AULA_DIR, aulaFile), join(OUT_AULA_DIR, aulaFile));
+  }
   copyFileSync(join(SITE_PROGRAM_DIR, 'program.css'), join(OUT_PROGRAM_DIR, 'program.css'));
   copyFileSync(join(SITE_PROGRAM_DIR, 'program.js'), join(OUT_PROGRAM_DIR, 'program.js'));
 
   writeFileSync(join(OUT_DIR, 'config.json'), JSON.stringify(configObj, null, 2) + '\n', 'utf8');
+  writeFileSync(join(OUT_AULA_DIR, 'config.json'), JSON.stringify(configObj, null, 2) + '\n', 'utf8');
   writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(staticPrograms, null, 2) + '\n', 'utf8');
   writeFileSync(join(OUT_DIR, '.nojekyll'), '', 'utf8');
 
@@ -164,6 +171,7 @@ function build() {
 
   let indexHtml = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
   let adminIndexHtml = readFileSync(join(SITE_ADMIN_DIR, 'index.html'), 'utf8');
+  let aulaIndexHtml = readFileSync(join(SITE_AULA_DIR, 'index.html'), 'utf8');
   const programTemplateHtml = readFileSync(join(SITE_PROGRAM_DIR, 'template.html'), 'utf8');
 
   const configTagRegex = /<script id="ucg-config" type="application\/json">[\s\S]*?<\/script>/;
@@ -182,6 +190,12 @@ function build() {
   if (!catalogTagRegex.test(adminIndexHtml)) {
     throw new Error('No se encontró <script id="catalog-data"> en site/admin/index.html.');
   }
+  if (!configTagRegex.test(aulaIndexHtml)) {
+    throw new Error('No se encontró <script id="ucg-config"> en site/aula/index.html.');
+  }
+  if (!catalogTagRegex.test(aulaIndexHtml)) {
+    throw new Error('No se encontró <script id="catalog-data"> en site/aula/index.html.');
+  }
 
   const inlineConfigScript = `<script id="ucg-config" type="application/json">${safeInlineJson(configObj)}</script>`;
   const inlineCatalogScript = `<script id="catalog-data" type="application/json">${safeInlineJson(staticPrograms)}</script>`;
@@ -192,6 +206,10 @@ function build() {
     .replace(optionsMarker, () => programOptionsHtml);
 
   adminIndexHtml = adminIndexHtml
+    .replace(configTagRegex, () => inlineConfigScript)
+    .replace(catalogTagRegex, () => inlineCatalogScript);
+
+  aulaIndexHtml = aulaIndexHtml
     .replace(configTagRegex, () => inlineConfigScript)
     .replace(catalogTagRegex, () => inlineCatalogScript);
 
@@ -212,6 +230,7 @@ function build() {
 
   writeFileSync(join(OUT_DIR, 'index.html'), indexHtml, 'utf8');
   writeFileSync(join(OUT_ADMIN_DIR, 'index.html'), adminIndexHtml, 'utf8');
+  writeFileSync(join(OUT_AULA_DIR, 'index.html'), aulaIndexHtml, 'utf8');
   writeFileSync(join(OUT_CRM_DIR, 'index.html'), crmRedirectHtml, 'utf8');
 
   const programasIndexHtml = `<!doctype html>
@@ -248,7 +267,7 @@ function build() {
   const sitemapXml = buildSitemapXml(staticPrograms);
   writeFileSync(join(OUT_DIR, 'sitemap.xml'), sitemapXml, 'utf8');
 
-  verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml, renderedPrograms, sitemapXml);
+  verifyOutput(staticPrograms, indexHtml, adminIndexHtml, aulaIndexHtml, crmRedirectHtml, renderedPrograms, sitemapXml);
 
   console.log(
     JSON.stringify(
@@ -258,6 +277,7 @@ function build() {
         pages: [
           'index.html',
           'admin/index.html',
+          'aula/index.html',
           'crm/index.html (redirect)',
           'programas/index.html (redirect)',
           `${renderedPrograms.length} programas/{slug}/index.html`,
@@ -437,6 +457,7 @@ function renderProgramHtml({ template, program, allPrograms, inlineConfigScript,
     : '';
 
   const replacements = new Map([
+    ['<!--PROGRAM_SLUG-->', encodeURIComponent(program.slug)],
     ['<!--PROGRAM_TITLE-->', escapeHtml(program.title)],
     ['<!--PROGRAM_DESCRIPTION-->', escapeHtml(program.summary)],
     ['<!--PROGRAM_IMAGE-->', escapeHtml(imageRelFromProgram)],
@@ -487,6 +508,7 @@ function buildSitemapXml(staticPrograms) {
   const verifiedDate = brand.verifiedAt || '2026-11-22';
   const urls = [
     `${CANONICAL_BASE}/`,
+    `${CANONICAL_BASE}/aula/`,
     ...staticPrograms.map((p) => `${CANONICAL_BASE}/programas/${encodeURIComponent(p.slug)}/`)
   ];
   const entries = urls.map((loc, idx) => `  <url>
@@ -504,7 +526,7 @@ ${entries}
 
 function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
   const rootMediaRefs = [
-    ...htmlText.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|admin\.css|admin\.js|crm\.css|crm\.js|favicon\.svg)[^"']*)["']/g),
+    ...htmlText.matchAll(/(?:src|href|content)=["'](\/(?:media|styles\.css|app\.js|admin\.css|admin\.js|aula\.css|aula\.js|engine-3b1b\.js|avatar-kokoro\.js|kokoro-worker\.js|crm\.css|crm\.js|favicon\.svg)[^"']*)["']/g),
     ...cssText.matchAll(/url\(["']?(\/media\/[^)"']+)["']?\)/g)
   ];
   if (rootMediaRefs.length > 0) {
@@ -532,7 +554,7 @@ function verifyRelativeAssetRefs(baseDir, htmlText, cssText, label) {
   }
 }
 
-function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml, renderedPrograms, sitemapXml) {
+function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, aulaIndexHtml, crmRedirectHtml, renderedPrograms, sitemapXml) {
   if (staticPrograms.length !== 34) {
     throw new Error(`Se esperaban 34 programas en el catálogo y se encontraron ${staticPrograms.length}.`);
   }
@@ -546,6 +568,9 @@ function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml
   if (!indexHtml.includes('./admin/')) {
     throw new Error('dist-pages/index.html debe enlazar al workspace Admin (./admin/).');
   }
+  if (!indexHtml.includes('./aula/')) {
+    throw new Error('dist-pages/index.html debe enlazar al workspace Aula IA (./aula/).');
+  }
   if (!indexHtml.includes('#herramientas')) {
     throw new Error('dist-pages/index.html debe incluir la sección #herramientas.');
   }
@@ -554,6 +579,9 @@ function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml
   }
   if (!sitemapXml.includes(`${CANONICAL_BASE}/programas/`)) {
     throw new Error('dist-pages/sitemap.xml debe incluir las rutas /programas/{slug}/.');
+  }
+  if (!sitemapXml.includes(`${CANONICAL_BASE}/aula/`)) {
+    throw new Error('dist-pages/sitemap.xml debe incluir la ruta /aula/.');
   }
 
   for (const p of staticPrograms) {
@@ -570,11 +598,17 @@ function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml
   const jsContent = readFileSync(join(OUT_DIR, 'app.js'), 'utf8');
   const adminCssContent = readFileSync(join(OUT_ADMIN_DIR, 'admin.css'), 'utf8');
   const adminJsContent = readFileSync(join(OUT_ADMIN_DIR, 'admin.js'), 'utf8');
+  const aulaCssContent = readFileSync(join(OUT_AULA_DIR, 'aula.css'), 'utf8');
+  const aulaJsContent = readFileSync(join(OUT_AULA_DIR, 'aula.js'), 'utf8');
+  const engineJsContent = readFileSync(join(OUT_AULA_DIR, 'engine-3b1b.js'), 'utf8');
+  const avatarJsContent = readFileSync(join(OUT_AULA_DIR, 'avatar-kokoro.js'), 'utf8');
+  const workerJsContent = readFileSync(join(OUT_AULA_DIR, 'kokoro-worker.js'), 'utf8');
   const programCssContent = readFileSync(join(OUT_PROGRAM_DIR, 'program.css'), 'utf8');
   const programJsContent = readFileSync(join(OUT_PROGRAM_DIR, 'program.js'), 'utf8');
 
   verifyRelativeAssetRefs(OUT_DIR, indexHtml, cssContent, 'dist-pages/index.html');
   verifyRelativeAssetRefs(OUT_ADMIN_DIR, adminIndexHtml, adminCssContent, 'dist-pages/admin/index.html');
+  verifyRelativeAssetRefs(OUT_AULA_DIR, aulaIndexHtml, aulaCssContent, 'dist-pages/aula/index.html');
   verifyRelativeAssetRefs(OUT_CRM_DIR, crmRedirectHtml, '', 'dist-pages/crm/index.html');
   verifyRelativeAssetRefs(OUT_PROGRAM_DIR, '', programCssContent, 'dist-pages/program/program.css');
 
@@ -604,6 +638,12 @@ function verifyOutput(staticPrograms, indexHtml, adminIndexHtml, crmRedirectHtml
     ['admin/index.html', adminIndexHtml],
     ['admin/admin.css', adminCssContent],
     ['admin/admin.js', adminJsContent],
+    ['aula/index.html', aulaIndexHtml],
+    ['aula/aula.css', aulaCssContent],
+    ['aula/aula.js', aulaJsContent],
+    ['aula/engine-3b1b.js', engineJsContent],
+    ['aula/avatar-kokoro.js', avatarJsContent],
+    ['aula/kokoro-worker.js', workerJsContent],
     ['program/program.css', programCssContent],
     ['program/program.js', programJsContent],
     ['crm/index.html', crmRedirectHtml]

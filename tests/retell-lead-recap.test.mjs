@@ -282,7 +282,7 @@ test('respeta opt_out, consent_email false, migraciones idempotentes, CORS y cat
 
   // Re-running migrations on the same SQLite file must be idempotent
   applyMigrations(DB.raw);
-  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM _migrations').get().n, 5);
+  assert.equal(DB.raw.prepare('SELECT COUNT(*) n FROM _migrations').get().n, 6);
 
   t.mock.method(globalThis, 'fetch', () => assert.fail('No debe enviar correos sin consentimiento o tras baja'));
 
