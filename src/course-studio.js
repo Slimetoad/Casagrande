@@ -8,6 +8,9 @@ export const RENDERERS = [
   'probability_dist',
   'compound_growth',
   'system_flow',
+  'concept_map',
+  'timeline_arc',
+  'tension_matrix',
 ];
 
 const RENDERER_SET = new Set(RENDERERS);
@@ -51,6 +54,21 @@ const CANONICAL_PARAMS = {
     { id: 'throughput', label: 'Carga de tráfico', min: 10, max: 100, step: 5, default: 65, unit: '%' },
     { id: 'defense', label: 'Cobertura de defensa', min: 0, max: 100, step: 5, default: 80, unit: '%' },
     { id: 'latency', label: 'Latencia de inspección', min: 10, max: 250, step: 5, default: 45, unit: 'ms' },
+  ],
+  concept_map: [
+    { id: 'cohesion', label: 'Cohesión / Alianzas', min: 0, max: 100, step: 5, default: 60, unit: '' },
+    { id: 'tension', label: 'Tensión estratégica', min: 0, max: 100, step: 5, default: 45, unit: '' },
+    { id: 'influence', label: 'Influencia externa', min: 0, max: 100, step: 5, default: 55, unit: '' },
+  ],
+  timeline_arc: [
+    { id: 'eraFocus', label: 'Hito histórico', min: 0, max: 4, step: 1, default: 0, unit: '' },
+    { id: 'momentum', label: 'Impulso de cambio', min: 0, max: 100, step: 5, default: 65, unit: '' },
+    { id: 'continuity', label: 'Estabilidad institucional', min: 0, max: 100, step: 5, default: 55, unit: '' },
+  ],
+  tension_matrix: [
+    { id: 'axisX', label: 'Eje estratégico X', min: 0, max: 100, step: 5, default: 55, unit: '' },
+    { id: 'axisY', label: 'Eje estratégico Y', min: 0, max: 100, step: 5, default: 60, unit: '' },
+    { id: 'volatility', label: 'Presión del entorno', min: 0, max: 100, step: 5, default: 40, unit: '' },
   ],
 };
 
@@ -1279,6 +1297,27 @@ export const CURATED_COURSES = [
   },
 ];
 
+const QUALITATIVE_RE = /(geopolitica|america latina|latam|relaciones internacionales|diplomacia|politica|politicas publicas|historia|derecho|constitucional|juridico|comunicacion|periodismo|narrativa|marca|reputacion|liderazgo|cultura|etica|filosofia|sociologia|sociedad|gobierno|gobernanza|conflicto|integracion regional|derechos humanos|educacion|pedagogia|psicologia|gestion cultural|estrategia organizacional)/;
+const QUANTITATIVE_RE = /(algebra|matriz|matrices|vector|calculo|derivada|integral|gradiente|red neuronal|redes neuronales|deep learning|backprop|bayes|probabilidad|estadistica|gauss|interes compuesto|\bvpn\b|\btir\b|\bwacc\b|econometria|optimizacion|algoritmo|fisica|matematica)/;
+const QUALITATIVE_RENDERERS = new Set(['concept_map', 'timeline_arc', 'tension_matrix']);
+const STRUCTURAL_SCENE_KEYS = ['nodes', 'links', 'milestones', 'quadrants', 'items', 'xAxis', 'yAxis', 'scenarioLabel'];
+
+export function inferTopicProfile(topic, fallbackText = '') {
+  const qTopic = normalized(topic || '');
+  const hasQualTopic = QUALITATIVE_RE.test(qTopic);
+  const hasQuantTopic = QUANTITATIVE_RE.test(qTopic);
+  if (hasQualTopic && hasQuantTopic) return 'hybrid';
+  if (hasQualTopic) return 'qualitative';
+  if (hasQuantTopic) return 'quantitative';
+
+  const qFallback = normalized(fallbackText || '');
+  const hasQualFb = QUALITATIVE_RE.test(qFallback);
+  const hasQuantFb = QUANTITATIVE_RE.test(qFallback);
+  if (hasQualFb && !hasQuantFb) return 'qualitative';
+  if (hasQuantFb && !hasQualFb) return 'quantitative';
+  return 'hybrid';
+}
+
 function inferRendererFromTopic(text, fallbackText = '') {
   const match = value => {
     const q = normalized(value || '');
@@ -1287,6 +1326,9 @@ function inferRendererFromTopic(text, fallbackText = '') {
     if (/(red neuronal|redes neuronales|neuronal|deep learning|backprop|\bia\b|inteligencia artificial|machine learning|llm|transformer|perceptron)/.test(q)) return 'neural_network';
     if (/(bayes|probabilidad|estadistica|gauss|normal|incertidumbre|hipotesis|muestra|aleatori)/.test(q)) return 'probability_dist';
     if (/(finanza|interes|compuesto|vpn|valoracion|flujo de caja|inversion|tir|wacc|econom|portafolio|inflacion|rentabilidad|ahorro|contabilidad|tribut)/.test(q)) return 'compound_growth';
+    if (/(historia|evolucion|origenes|siglos|hitos|cronologia)/.test(q)) return 'timeline_arc';
+    if (/(dilema|regulacion|politica publica|politicas publicas|gobernanza|derecho|liderazgo|negociacion|estrategia)/.test(q)) return 'tension_matrix';
+    if (/(geopolitica|america latina|latam|relaciones internacionales|alianzas|bloques|poder|actores|comunicacion|cultura|sociedad)/.test(q)) return 'concept_map';
     return null;
   };
   return match(text) || match(fallbackText) || 'system_flow';
@@ -1316,6 +1358,60 @@ function defaultSceneState(renderer, variantIndex = 0) {
   }
   if (renderer === 'compound_growth') {
     return { showLinear: true, highlightYear: 5 + variantIndex * 4 };
+  }
+  if (renderer === 'concept_map') {
+    return {
+      activeNode: variantIndex % 6,
+      scenarioLabel: 'Constelación de actores e intereses',
+      nodes: [
+        'Estado y política exterior',
+        'Bloques regionales',
+        'Cadenas comerciales',
+        'Sociedad y opinión pública',
+        'Potencias externas',
+        'Organismos multilaterales',
+      ],
+      links: [
+        { from: 0, to: 1, label: 'Alianza', tone: 'ally' },
+        { from: 0, to: 2, label: 'Intercambio', tone: 'trade' },
+        { from: 1, to: 5, label: 'Acuerdos', tone: 'ally' },
+        { from: 4, to: 0, label: 'Influencia', tone: 'influence' },
+        { from: 4, to: 2, label: 'Fricción', tone: 'tension' },
+        { from: 3, to: 0, label: 'Legitimidad', tone: 'influence' },
+      ],
+    };
+  }
+  if (renderer === 'timeline_arc') {
+    return {
+      activeMilestone: variantIndex % 5,
+      milestones: [
+        { era: 'Etapa I', title: 'Bases institucionales', detail: 'Acuerdos iniciales que estructuraron las reglas del periodo.' },
+        { era: 'Etapa II', title: 'Expansión y bloques', detail: 'Articulación de redes regionales y marcos de cooperación.' },
+        { era: 'Etapa III', title: 'Quiebre y reforma', detail: 'Crisis que obligaron a replantear consensos y prioridades.' },
+        { era: 'Etapa IV', title: 'Giro multipolar', detail: 'Nueva competencia por recursos, comercio y tecnología.' },
+        { era: 'Etapa V', title: 'Horizonte actual', detail: 'Equilibrio entre autonomía estratégica e integración práctica.' },
+      ],
+    };
+  }
+  if (renderer === 'tension_matrix') {
+    return {
+      xAxis: 'Autonomía nacional ↔ Integración regional',
+      yAxis: 'Corto plazo ↔ Visión de Estado',
+      quadrants: [
+        'Autonomía táctica',
+        'Integración estratégica',
+        'Reacción coyuntural',
+        'Consenso de largo plazo',
+      ],
+      items: [
+        { label: 'Pacto comercial amplio', x: 78, y: 76 },
+        { label: 'Negociación bilateral', x: 30, y: 66 },
+        { label: 'Medida arancelaria puntual', x: 24, y: 28 },
+        { label: 'Corredor energético regional', x: 72, y: 62 },
+        { label: 'No alineamiento activo', x: 52, y: 55 },
+      ],
+      focusItem: variantIndex % 5,
+    };
   }
   return { activeNode: variantIndex % 5, attackPulse: variantIndex % 2 === 0 };
 }
@@ -1375,9 +1471,18 @@ function normalizeBeats(rawBeats, lessonTitle, lessonSummary, lessonEquation, re
     const t = Number.isFinite(parsedT) && parsedT > lastT ? Math.round(parsedT) : (lastT < 0 ? 0 : lastT + 11);
     lastT = t;
     const mood = VALID_MOODS.has(b.mood) ? b.mood : moods[i % moods.length];
-    const sceneState = b.sceneState && typeof b.sceneState === 'object' && !Array.isArray(b.sceneState)
-      ? { ...defaultSceneState(renderer, lessonIndex + i), ...b.sceneState }
-      : defaultSceneState(renderer, lessonIndex + i);
+    const baseDefault = defaultSceneState(renderer, lessonIndex + i);
+    const beat0 = normalizedList[0]?.sceneState || null;
+    const inherited = {};
+    if (beat0) {
+      for (const key of STRUCTURAL_SCENE_KEYS) {
+        if (beat0[key] !== undefined) inherited[key] = beat0[key];
+      }
+    }
+    const rawScene = b.sceneState && typeof b.sceneState === 'object' && !Array.isArray(b.sceneState)
+      ? b.sceneState
+      : {};
+    const sceneState = { ...baseDefault, ...inherited, ...rawScene };
     const caption = clean(b.caption, 220) || clean(b.title, 120) || lessonSummary;
     const speechText = clean(b.speechText, 800) || caption;
     normalizedList.push({
@@ -1397,11 +1502,19 @@ function normalizeBeats(rawBeats, lessonTitle, lessonSummary, lessonEquation, re
     lastT = t;
     const fallbackCaptions = [
       `Planteamos la pregunta central de ${lessonTitle}.`,
-      'Observamos cómo interactúan las variables en tiempo real.',
-      'Conectamos la intuición visual con su expresión formal.',
+      'Observamos cómo interactúan los factores clave en tiempo real.',
+      'Conectamos la perspectiva visual con su tesis conceptual.',
       'Sintetizamos el criterio práctico para tomar mejores decisiones.',
     ];
     const caption = fallbackCaptions[idx % fallbackCaptions.length];
+    const baseDefault = defaultSceneState(renderer, lessonIndex + idx);
+    const beat0 = normalizedList[0]?.sceneState || null;
+    const inherited = {};
+    if (beat0) {
+      for (const key of STRUCTURAL_SCENE_KEYS) {
+        if (beat0[key] !== undefined) inherited[key] = beat0[key];
+      }
+    }
     normalizedList.push({
       t,
       title: `Paso ${idx + 1}`,
@@ -1409,7 +1522,7 @@ function normalizeBeats(rawBeats, lessonTitle, lessonSummary, lessonEquation, re
       equation: lessonEquation,
       mood: moods[idx % moods.length],
       speechText: `${caption} ${lessonSummary}`,
-      sceneState: defaultSceneState(renderer, lessonIndex + idx),
+      sceneState: { ...baseDefault, ...inherited },
     });
   }
   return normalizedList;
@@ -1456,9 +1569,12 @@ export function normalizeCoursePayload(raw, defaults = {}) {
     ? defaults.voiceId
     : (VALID_VOICES.has(data.voiceId) ? data.voiceId : 'ef_dora');
   const targetLessons = Math.min(4, Math.max(3, Number(defaults.lessonCount) || 3));
-  const primaryRenderer = RENDERER_SET.has(data.renderer)
-    ? data.renderer
-    : inferRendererFromTopic(topic, `${program?.title || ''} ${program?.area || ''}`);
+  const topicProfile = defaults.topicProfile || inferTopicProfile(topic, `${program?.area || ''} ${program?.title || ''}`);
+  const inferredPrimary = inferRendererFromTopic(topic, `${program?.title || ''} ${program?.area || ''}`);
+  let primaryRenderer = RENDERER_SET.has(data.renderer) ? data.renderer : inferredPrimary;
+  if (topicProfile === 'qualitative' && !QUALITATIVE_RENDERERS.has(primaryRenderer) && primaryRenderer !== 'system_flow') {
+    primaryRenderer = QUALITATIVE_RENDERERS.has(inferredPrimary) ? inferredPrimary : 'concept_map';
+  }
 
   const rawLessons = Array.isArray(data.lessons) ? data.lessons.filter(l => l && typeof l === 'object') : [];
   const lessons = [];
@@ -1468,7 +1584,10 @@ export function normalizeCoursePayload(raw, defaults = {}) {
     const srcLesson = rawLessons[i];
     if (!srcLesson && lessons.length >= targetLessons) break;
     const l = srcLesson || {};
-    const renderer = RENDERER_SET.has(l.renderer) ? l.renderer : primaryRenderer;
+    let renderer = RENDERER_SET.has(l.renderer) ? l.renderer : primaryRenderer;
+    if (topicProfile === 'qualitative' && !QUALITATIVE_RENDERERS.has(renderer) && renderer !== 'system_flow') {
+      renderer = QUALITATIVE_RENDERERS.has(primaryRenderer) ? primaryRenderer : 'concept_map';
+    }
     const title = clean(l.title, 140) || `Lección ${i + 1}: ${topic}`;
     const summary = clean(l.summary, 320) || `Exploración visual e intuitiva de ${topic} aplicada paso a paso.`;
     const equation = clean(l.equation, 240) || (
@@ -1477,7 +1596,10 @@ export function normalizeCoursePayload(raw, defaults = {}) {
       renderer === 'neural_network' ? '\\hat{y} = \\sigma(w_1 x_1 + w_2 x_2 + b)' :
       renderer === 'probability_dist' ? 'P(H\\mid E) = \\frac{P(H)P(E\\mid H)}{P(E)}' :
       renderer === 'compound_growth' ? 'V_t = C_0(1+r)^t' :
-      '\\text{Flujo}_{\\text{neto}} = \\Phi(\\text{carga},\\text{defensa},\\text{latencia})'
+      renderer === 'concept_map' ? 'Red de actores · Alianzas, intereses y contrapesos' :
+      renderer === 'timeline_arc' ? 'Trayectoria histórica · Rupturas y continuidades' :
+      renderer === 'tension_matrix' ? 'Mapa estratégico · Dilemas y equilibrios de decisión' :
+      'Arquitectura de flujo · Capacidad, respaldo y resiliencia'
     );
     const beats = normalizeBeats(l.beats, title, summary, equation, renderer, i);
     const params = normalizeParams(l.params, renderer, beats[0]?.sceneState);
@@ -1520,14 +1642,255 @@ export function normalizeCoursePayload(raw, defaults = {}) {
   };
 }
 
+function buildQualitativePreset(topic, renderer, variantIndex = 0) {
+  const q = normalized(topic || '');
+  const isGeopolitics = /(geopolitica|america latina|latam|relaciones internacionales|diplomacia|integracion regional|bloques)/.test(q);
+  const isLawPolicy = /(derecho|constitucional|juridico|politica publica|politicas publicas|gobernanza|regulacion)/.test(q);
+
+  if (renderer === 'concept_map') {
+    if (isGeopolitics) {
+      return {
+        activeNode: variantIndex % 6,
+        scenarioLabel: 'Sistema interamericano y polos globales',
+        nodes: [
+          'Estados Andinos',
+          'Mercosur / Cono Sur',
+          'Alianza del Pacífico',
+          'Estados Unidos',
+          'China (comercio e infraestructura)',
+          'Organismos multilaterales',
+        ],
+        links: [
+          { from: 0, to: 2, label: 'Integración', tone: 'ally' },
+          { from: 1, to: 4, label: 'Commodities', tone: 'trade' },
+          { from: 3, to: 0, label: 'Seguridad', tone: 'influence' },
+          { from: 3, to: 4, label: 'Rivalidad', tone: 'tension' },
+          { from: 2, to: 5, label: 'Reglas', tone: 'ally' },
+          { from: 1, to: 2, label: 'Convergencia', tone: 'trade' },
+        ],
+      };
+    }
+    if (isLawPolicy) {
+      return {
+        activeNode: variantIndex % 6,
+        scenarioLabel: 'Ecosistema institucional y derechos',
+        nodes: [
+          'Constitución y garantías',
+          'Función Ejecutiva',
+          'Legislativo y control',
+          'Cortes y jurisprudencia',
+          'Ciudadanía y sociedad civil',
+          'Estándares internacionales',
+        ],
+        links: [
+          { from: 0, to: 3, label: 'Control', tone: 'ally' },
+          { from: 1, to: 2, label: 'Peso y contrapeso', tone: 'tension' },
+          { from: 4, to: 0, label: 'Participación', tone: 'influence' },
+          { from: 5, to: 3, label: 'Convencionalidad', tone: 'ally' },
+          { from: 2, to: 1, label: 'Fiscalización', tone: 'tension' },
+          { from: 4, to: 2, label: 'Mandato', tone: 'trade' },
+        ],
+      };
+    }
+    return defaultSceneState('concept_map', variantIndex);
+  }
+
+  if (renderer === 'timeline_arc') {
+    if (isGeopolitics) {
+      return {
+        activeMilestone: variantIndex % 5,
+        milestones: [
+          { era: '1960–1989', title: 'Industrialización y Pacto Andino', detail: 'Primeros esquemas de integración subregional y diplomacia de autonomía.' },
+          { era: '1991–2001', title: 'Regionalismo abierto y Mercosur', detail: 'Creación del Mercosur, tratados comerciales y retorno democrático regional.' },
+          { era: '2003–2014', title: 'Auge asiático y recursos críticos', detail: 'Expansión comercial con China y creación de nuevos foros sudamericanos.' },
+          { era: '2015–2023', title: 'Fragmentación y cadenas de valor', detail: 'Tensiones migratorias, transición energética y disputa tecnológica global.' },
+          { era: 'Horizonte actual', title: 'No alineamiento activo', detail: 'Búsqueda de acuerdos pragmáticos sobre litio, energía, clima y comercio.' },
+        ],
+      };
+    }
+    if (isLawPolicy) {
+      return {
+        activeMilestone: variantIndex % 5,
+        milestones: [
+          { era: 'Etapa I', title: 'Constitucionalismo clásico', detail: 'Separación de poderes y límites formales al ejercicio de la autoridad.' },
+          { era: 'Etapa II', title: 'Estado social de derechos', detail: 'Incorporación de garantías laborales, educativas y protección social.' },
+          { era: 'Etapa III', title: 'Bloque de constitucionalidad', detail: 'Integración directa de tratados internacionales de derechos humanos.' },
+          { era: 'Etapa IV', title: 'Gobernanza y transparencia', detail: 'Mecanismos de control ciudadano, datos abiertos y rendición de cuentas.' },
+          { era: 'Hoy', title: 'Regulación digital y ética pública', detail: 'Desafíos frente a IA, protección de datos y contratación transparente.' },
+        ],
+      };
+    }
+    return defaultSceneState('timeline_arc', variantIndex);
+  }
+
+  if (renderer === 'tension_matrix') {
+    if (isGeopolitics) {
+      return {
+        xAxis: 'Autonomía nacional ↔ Integración regional',
+        yAxis: 'Coyuntura inmediata ↔ Visión de Estado',
+        quadrants: [
+          'Autonomía táctica',
+          'Integración estratégica',
+          'Reacción bilateral',
+          'Bloque institucional',
+        ],
+        items: [
+          { label: 'Alianza del Pacífico', x: 74, y: 72 },
+          { label: 'Diplomacia de infraestructura', x: 64, y: 80 },
+          { label: 'Aranceles de corto plazo', x: 22, y: 24 },
+          { label: 'Acuerdo bilateral minero-energético', x: 32, y: 66 },
+          { label: 'Convergencia logística regional', x: 82, y: 78 },
+        ],
+        focusItem: variantIndex % 5,
+      };
+    }
+    return defaultSceneState('tension_matrix', variantIndex);
+  }
+
+  return defaultSceneState(renderer, variantIndex);
+}
+
 function buildTemplateCourse({ topic, programSlug, level, lessonCount, voiceId }) {
   const program = programs.find(p => p.slug === programSlug) || null;
+  const profile = inferTopicProfile(topic, `${program?.area || ''} ${program?.title || ''}`);
   const baseRenderer = inferRendererFromTopic(topic, `${program?.title || ''} ${program?.area || ''}`);
+  const subjects = program?.curriculum?.slice(0, 4) || [];
+  const count = Math.min(4, Math.max(3, Number(lessonCount) || 3));
+  const programHook = program
+    ? ` Este enfoque se profundiza en la ${program.title} de la Universidad Casa Grande${program.cesResolution ? ` (resolución ${program.cesResolution})` : ''}.`
+    : '';
+
+  if (profile === 'qualitative') {
+    const qualPrimary = QUALITATIVE_RENDERERS.has(baseRenderer) ? baseRenderer : 'concept_map';
+    const qualSeq = qualPrimary === 'timeline_arc'
+      ? ['timeline_arc', 'concept_map', 'tension_matrix', 'timeline_arc']
+      : qualPrimary === 'tension_matrix'
+        ? ['tension_matrix', 'concept_map', 'timeline_arc', 'tension_matrix']
+        : ['concept_map', 'timeline_arc', 'tension_matrix', 'concept_map'];
+
+    const thesisByRenderer = {
+      concept_map: `Actores, alianzas y contrapesos en ${clean(topic, 50)}`,
+      timeline_arc: `Evolución histórica y puntos de inflexión en ${clean(topic, 45)}`,
+      tension_matrix: `Dilemas estratégicos y equilibrios en ${clean(topic, 48)}`,
+    };
+
+    const qualBlueprints = [
+      {
+        focus: `Mapa de actores y relaciones de poder en ${topic}`,
+        summary: `Identifica los actores clave, intereses convergentes y focos de fricción que explican ${topic}.`,
+        prompt: 'Explora los nodos de actores y mueve Cohesión, Tensión e Influencia externa para simular nuevos equilibrios.',
+      },
+      {
+        focus: subjects[0] ? `Trayectoria histórica: ${subjects[0]}` : `Evolución histórica e hitos decisivos de ${topic}`,
+        summary: `Recorre las etapas, rupturas institucionales y continuidades que dieron forma actual a ${topic}.`,
+        prompt: 'Selecciona distintos hitos históricos y ajusta el Impulso de cambio frente a la Estabilidad institucional.',
+      },
+      {
+        focus: subjects[1] ? `Dilemas estratégicos: ${subjects[1]}` : `Matriz de decisiones y tensiones en ${topic}`,
+        summary: `Contrasta intereses en competencia para evaluar decisiones viables y sostenibles dentro de ${topic}.`,
+        prompt: 'Desplaza el marcador entre los ejes estratégicos y sube la Presión del entorno para probar cada cuadrante.',
+      },
+      {
+        focus: subjects[2] ? `Síntesis aplicada: ${subjects[2]}` : `Escenarios prospectivos y gobernanza en ${topic}`,
+        summary: `Integra actores, memoria histórica y margen de maniobra para diseñar respuestas estratégicas${program ? ` en ${program.shortTitle}` : ''}.`,
+        prompt: 'Combina alianzas e influencia externa para construir un escenario regional estable.',
+      },
+    ];
+
+    const lessons = qualBlueprints.slice(0, count).map((bp, idx) => {
+      const r = qualSeq[idx % qualSeq.length];
+      const thesis = clean(thesisByRenderer[r], 85);
+      const s0 = buildQualitativePreset(topic, r, 0);
+      return {
+        id: `tpl-q${idx + 1}`,
+        title: `${idx + 1}. ${bp.focus}`,
+        summary: bp.summary,
+        renderer: r,
+        equation: thesis,
+        explorePrompt: bp.prompt,
+        params: defaultParamsFor(r, s0),
+        beats: [
+          {
+            t: 0,
+            title: 'El escenario y sus protagonistas',
+            caption: `Qué actores o hitos definen hoy el debate sobre ${topic}.`,
+            equation: thesis,
+            mood: 'curious',
+            speechText: `Bienvenido a esta clase sobre ${topic}. En lugar de memorizar etiquetas aisladas, observemos en el lienzo cómo interactúan los protagonistas, las instituciones y las tensiones reales que moldean este campo.`,
+            sceneState: s0,
+          },
+          {
+            t: 11,
+            title: 'Alianzas, fricciones y peso externo',
+            caption: 'Cada desplazamiento en un actor altera el equilibrio del conjunto.',
+            equation: thesis,
+            mood: 'excited',
+            speechText: 'Fíjate en cómo cambian las conexiones cuando aumenta la presión del entorno o se consolida una alianza regional. Entender esos contrapesos permite leer el tablero completo con claridad.',
+            sceneState: r === 'concept_map'
+              ? { activeNode: 1, cohesion: 75, tension: 35, influence: 60 }
+              : r === 'timeline_arc'
+                ? { activeMilestone: 1, eraFocus: 1, momentum: 75, continuity: 65 }
+                : { focusItem: 1, axisX: 72, axisY: 74, volatility: 35 },
+          },
+          {
+            t: 22,
+            title: 'De la coyuntura a la visión estructural',
+            caption: 'Las reglas vigentes responden a procesos acumulados y decisiones estratégicas.',
+            equation: thesis,
+            mood: 'neutral',
+            speechText: `Al cruzar los intereses actuales con la memoria institucional del proceso, distinguimos qué es ruido pasajero y qué representa un cambio de época duradero.${programHook}`,
+            sceneState: r === 'concept_map'
+              ? { activeNode: 4, cohesion: 45, tension: 70, influence: 80 }
+              : r === 'timeline_arc'
+                ? { activeMilestone: 3, eraFocus: 3, momentum: 80, continuity: 40 }
+                : { focusItem: 3, axisX: 35, axisY: 68, volatility: 65 },
+          },
+          {
+            t: 34,
+            title: 'Simula y contrasta tu criterio',
+            caption: 'Mueve los controles del escenario y valida tu análisis en el cuestionario.',
+            equation: thesis,
+            mood: 'emphatic',
+            speechText: 'Ahora es tu turno: interactúa directamente con el mapa conceptual, recorre cada hito y pon a prueba tu criterio estratégico con el cuestionario al pie de la lección.',
+            sceneState: r === 'concept_map'
+              ? { activeNode: 0 }
+              : r === 'timeline_arc'
+                ? { activeMilestone: 4, eraFocus: 4 }
+                : { focusItem: 4 },
+          },
+        ],
+        quiz: {
+          question: `Al analizar "${bp.focus}", ¿por qué es clave observar conjuntamente actores, trayectoria histórica y tensiones estratégicas?`,
+          options: [
+            'Porque las decisiones reales nacen de contrapesos entre actores, memoria institucional y margen de acción',
+            'Porque todos los procesos políticos y sociales siguen una fórmula matemática única e invariable',
+            'Porque los factores externos nunca influyen en los equilibrios internos',
+            'Porque la historia previa no condiciona las opciones del presente',
+          ],
+          correctIndex: 0,
+          explanation: 'Cruzar el mapa de actores, los hitos previos y los dilemas estratégicos evita análisis simplistas y revela márgenes reales de decisión.',
+        },
+      };
+    });
+
+    const titleTopic = topic.charAt(0).toUpperCase() + topic.slice(1);
+    return {
+      topic,
+      title: program ? `${titleTopic} · Enfoque ${program.shortTitle}` : titleTopic,
+      subtitle: program
+        ? `Curso visual interactivo diseñado en torno a ${topic}, conectado con la malla verificada de ${program.title} (${brand.shortName}).`
+        : `Clase visual interactiva de análisis estratégico, actores e historia sobre ${topic}.`,
+      programSlug: program?.slug || null,
+      level,
+      voiceId,
+      renderer: lessons[0]?.renderer || qualPrimary,
+      lessons,
+    };
+  }
+
   const secondaryRenderer = baseRenderer === 'system_flow' ? 'probability_dist' :
     baseRenderer === 'compound_growth' ? 'probability_dist' :
     baseRenderer === 'neural_network' ? 'calculus_curve' : baseRenderer;
-  const subjects = program?.curriculum?.slice(0, 4) || [];
-  const count = Math.min(4, Math.max(3, Number(lessonCount) || 3));
 
   const equationByRenderer = {
     vector_space: 'T(\\vec{v}) = \\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}\\vec{v}, \\quad \\det(A)=ad-bc',
@@ -1567,11 +1930,8 @@ function buildTemplateCourse({ topic, programSlug, level, lessonCount, voiceId }
 
   const lessons = lessonBlueprints.slice(0, count).map((bp, idx) => {
     const r = bp.renderer;
-    const eq = equationByRenderer[r];
+    const eq = equationByRenderer[r] || 'E_{\\text{efectiva}} = \\text{Capacidad}\\times(1 - \\text{Riesgo})';
     const s0 = defaultSceneState(r, idx);
-    const programHook = program
-      ? ` Este enfoque se profundiza en la ${program.title} de la Universidad Casa Grande${program.cesResolution ? ` (resolución ${program.cesResolution})` : ''}.`
-      : '';
     return {
       id: `tpl-l${idx + 1}`,
       title: `${idx + 1}. ${bp.focus}`,
@@ -1780,29 +2140,41 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
   const lessonCount = Math.min(4, Math.max(3, Number.parseInt(input.lessonCount, 10) || 3));
   const voiceId = VALID_VOICES.has(input.voiceId) ? input.voiceId : 'ef_dora';
 
+  const topicProfile = inferTopicProfile(safeTopic, matchedProgram ? `${matchedProgram.area} ${matchedProgram.title}` : '');
   let mode = 'plantilla';
   let rawCourse = null;
   const aiVendor = activeAI(env || {});
 
   if (aiVendor) {
     const systemPrompt = [
-      'Eres diseñador pedagógico y director de animaciones matemáticas estilo 3Blue1Brown para UCG Aula Interactiva IA (Universidad Casa Grande, Guayaquil, Ecuador).',
-      'Crea un curso visual en español claro y ejecutivo que privilegie intuición geométrica antes de la fórmula.',
-      `Usa EXCLUSIVAMENTE estos 6 renderers y varía los renderers entre lecciones: ${RENDERERS.join(', ')}.`,
-      'Parámetros canónicos exactos por renderer:',
+      'Eres diseñador pedagógico y director de clases visuales interactivas de posgrado para UCG Aula Interactiva IA (Universidad Casa Grande, Guayaquil, Ecuador).',
+      `Motores visuales disponibles: ${RENDERERS.join(', ')}.`,
+      'Reglas según `perfilSugerido` en la entrada del usuario:',
+      '- Si `perfilSugerido` es "qualitative" (geopolítica, historia, derecho, política, liderazgo, comunicación, humanidades, estrategia):',
+      '  * Usa EXCLUSIVAMENTE `concept_map`, `timeline_arc`, `tension_matrix` (y opcionalmente `system_flow` solo con `nodes` propios del tema). NUNCA uses `vector_space`, `calculus_curve`, `neural_network`, `probability_dist` ni `compound_growth`.',
+      '  * NUNCA inventes fórmulas matemáticas, vectores ni sintaxis LaTeX (`\\vec`, `\\frac`, `\\det`, `=`). En `equation` escribe una tesis conceptual breve en español plano (<= 85 caracteres, por ejemplo "Autonomía estratégica ↔ Integración pragmática en un orden multipolar").',
+      '  * Define los arreglos base (`nodes`+`links`, `milestones`, o `xAxis`+`yAxis`+`quadrants`+`items`) en el beat 0 de cada lección, y en beats 1–3 solo cambia `activeNode` / `activeMilestone` / `focusItem` y los sliders (`cohesion`, `tension`, `influence`, `eraFocus`, `momentum`, `continuity`, `axisX`, `axisY`, `volatility`) para mantener el JSON compacto sin truncarse.',
+      '  * Usa nombres reales de actores, regiones, instituciones, tratados o hitos (en lugar de metáforas matemáticas) tanto en `sceneState` como en `speechText`.',
+      '- Si `perfilSugerido` es "quantitative": usa los motores cuantitativos (`vector_space`, `calculus_curve`, `neural_network`, `probability_dist`, `compound_growth`, `system_flow`) con LaTeX real e intuición geométrica 3Blue1Brown.',
+      '- Si `perfilSugerido` es "hybrid": combina marcos conceptuales (`concept_map` / `tension_matrix` / `timeline_arc`) con modelos cuantitativos solo donde aporten claridad real.',
+      'Parámetros canónicos exactos por motor:',
       '- vector_space: a, b, c, d',
       '- calculus_curve: x0, h, n (sceneState.mode en derivative | integral | gradient)',
       '- neural_network: w1, w2, bias, inputA (sceneState.stage en forward | boundary | loss | backprop)',
       '- probability_dist: prior, sensitivity, falsePos (sceneState.mode bayes) o mu, sigma (sceneState.mode gaussian)',
       '- compound_growth: capital, rate, years',
       '- system_flow: throughput, defense, latency (sceneState.activeNode 0..5)',
+      '- concept_map: cohesion, tension, influence (sceneState: { activeNode, scenarioLabel, nodes[5-6], links[{from,to,label,tone}] })',
+      '- timeline_arc: eraFocus (0..4), momentum, continuity (sceneState: { activeMilestone, milestones[5]{era,title,detail} })',
+      '- tension_matrix: axisX, axisY, volatility (sceneState: { xAxis, yAxis, quadrants[4], items[5]{label,x,y}, focusItem })',
       'Si recibes datos de una maestría UCG, ancla ejemplos solo en esos hechos verificados (no inventes precios si inversion es null).',
       'Responde SOLO con JSON válido puro (sin ```json ni texto extra): {"title":"<=80 chars","subtitle":"<=140 chars","renderer":"...","lessons":[...]} con exactamente ' + lessonCount + ' lecciones.',
-      'Mantén el JSON compacto para no exceder tokens: cada lección con id, title, summary (1 frase), renderer, equation (LaTeX), explorePrompt (1 frase), params (2-3 objetos {id,label,min,max,step,default,unit}), exactamente 4 beats ({t,title,caption (<=16 palabras),equation,mood (neutral|curious|excited|emphatic),speechText (22-38 palabras naturales en español),sceneState}), y quiz ({question,options(4 cortas),correctIndex,explanation (1 frase)}).',
+      'Mantén el JSON compacto para no exceder tokens: cada lección con id, title, summary (1 frase), renderer, equation (LaTeX si es cuantitativo o tesis conceptual plana si es cualitativo), explorePrompt (1 frase), params (2-3 objetos {id,label,min,max,step,default,unit}), exactamente 4 beats ({t,title,caption (<=16 palabras),equation,mood (neutral|curious|excited|emphatic),speechText (22-38 palabras naturales en español),sceneState}), y quiz ({question,options(4 cortas),correctIndex,explanation (1 frase)}).',
     ].join('\n');
 
     const userPrompt = JSON.stringify({
       tema: safeTopic,
+      perfilSugerido: topicProfile,
       nivel: level,
       numeroLecciones: lessonCount,
       vozId: voiceId,
@@ -1851,6 +2223,7 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
     id,
     slug: id,
     topic: safeTopic,
+    topicProfile,
     programSlug,
     level,
     voiceId,

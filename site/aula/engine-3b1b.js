@@ -5,6 +5,9 @@ export const RENDERERS = [
   'probability_dist',
   'compound_growth',
   'system_flow',
+  'concept_map',
+  'timeline_arc',
+  'tension_matrix',
 ];
 
 const PALETTE = {
@@ -61,6 +64,21 @@ const CANONICAL_PARAMS = {
     throughput: { id: 'throughput', label: 'Flujo', min: 10, max: 100, step: 1, default: 72, unit: '%' },
     defense: { id: 'defense', label: 'Defensa', min: 0, max: 100, step: 1, default: 80, unit: '%' },
     latency: { id: 'latency', label: 'Latencia', min: 5, max: 200, step: 5, default: 25, unit: 'ms' },
+  },
+  concept_map: {
+    cohesion: { id: 'cohesion', label: 'Cohesión / Alianzas', min: 0, max: 100, step: 5, default: 60, unit: '' },
+    tension: { id: 'tension', label: 'Tensión estratégica', min: 0, max: 100, step: 5, default: 45, unit: '' },
+    influence: { id: 'influence', label: 'Influencia externa', min: 0, max: 100, step: 5, default: 55, unit: '' },
+  },
+  timeline_arc: {
+    eraFocus: { id: 'eraFocus', label: 'Hito histórico', min: 0, max: 4, step: 1, default: 0, unit: '' },
+    momentum: { id: 'momentum', label: 'Impulso de cambio', min: 0, max: 100, step: 5, default: 65, unit: '' },
+    continuity: { id: 'continuity', label: 'Estabilidad institucional', min: 0, max: 100, step: 5, default: 55, unit: '' },
+  },
+  tension_matrix: {
+    axisX: { id: 'axisX', label: 'Eje estratégico X', min: 0, max: 100, step: 5, default: 55, unit: '' },
+    axisY: { id: 'axisY', label: 'Eje estratégico Y', min: 0, max: 100, step: 5, default: 60, unit: '' },
+    volatility: { id: 'volatility', label: 'Presión del entorno', min: 0, max: 100, step: 5, default: 40, unit: '' },
   },
 };
 
@@ -1930,11 +1948,12 @@ function renderSystemFlow(ctx, state, layout) {
   ctx.lineWidth = 1.1;
   ctx.stroke();
 
+  const hudLabels = beatState?.hudLabels && typeof beatState.hudLabels === 'object' ? beatState.hudLabels : {};
   const metrics = [
-    { label: 'Flujo', val: `${Math.round(throughput)}%`, color: PALETTE.cyan },
-    { label: 'Defensa', val: `${Math.round(defense)}%`, color: defense >= 60 ? PALETTE.emerald : PALETTE.coral },
-    { label: 'Latencia', val: `${Math.round(latency)} ms`, color: latency <= 90 ? PALETTE.gold : PALETTE.coral },
-    { label: 'Resiliencia', val: `${Math.round(resilience)}%`, color: resilience >= 65 ? PALETTE.emerald : PALETTE.gold },
+    { label: hudLabels.a || 'Flujo', val: `${Math.round(throughput)}%`, color: PALETTE.cyan },
+    { label: hudLabels.b || 'Defensa', val: `${Math.round(defense)}%`, color: defense >= 60 ? PALETTE.emerald : PALETTE.coral },
+    { label: hudLabels.c || 'Latencia', val: `${Math.round(latency)} ms`, color: latency <= 90 ? PALETTE.gold : PALETTE.coral },
+    { label: hudLabels.d || 'Resiliencia', val: `${Math.round(resilience)}%`, color: resilience >= 65 ? PALETTE.emerald : PALETTE.gold },
   ];
   metrics.forEach((m, i) => {
     const mx = bounds.x + 24 + ((bounds.w - 48) * i) / 4;
@@ -1971,6 +1990,778 @@ function renderSystemFlow(ctx, state, layout) {
   }
 }
 
+function truncateText(text, maxLen = 24) {
+  const s = String(text || '').trim();
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
+}
+
+function wrapTextLines(ctx, text, maxWidth, maxLines = 3) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      line = candidate;
+    } else {
+      if (line) lines.push(line);
+      line = word;
+      if (lines.length >= maxLines) break;
+    }
+  }
+  if (line && lines.length < maxLines) {
+    lines.push(line);
+  }
+  if (lines.length === maxLines && words.length > lines.join(' ').split(' ').length) {
+    lines[maxLines - 1] = truncateText(lines[maxLines - 1], Math.max(8, lines[maxLines - 1].length - 1));
+  }
+  return lines;
+}
+
+function renderConceptMap(ctx, state, layout) {
+  const { width, height, params, pointer, simTime, isPlaying, beatState, lesson, entrance } = state;
+  const pad = 26;
+  const bounds = { x: pad, y: pad, w: width - pad * 2, h: height - pad * 2 };
+
+  drawGrid(
+    ctx,
+    {
+      originX: width * 0.5,
+      originY: height * 0.48,
+      scaleX: 54,
+      scaleY: 54,
+      width,
+      height,
+      bounds,
+    },
+    { step: 1, subdivisions: 1, showLabels: false, alpha: 0.36 }
+  );
+
+  const cohesion = clamp(params.cohesion ?? 60, 0, 100);
+  const tension = clamp(params.tension ?? 45, 0, 100);
+  const influence = clamp(params.influence ?? 55, 0, 100);
+  const reveal = easeOutCubic(clamp(entrance * 1.15, 0, 1));
+
+  const rawNodes = Array.isArray(beatState?.nodes) && beatState.nodes.length >= 3
+    ? beatState.nodes.slice(0, 6)
+    : [
+        'Estado / Gobierno',
+        'Bloque Regional',
+        'Actores Económicos',
+        'Sociedad Civil',
+        'Potencia Externa',
+        'Organismos Multilaterales',
+      ];
+
+  const defaultLinks = [
+    { from: 0, to: 1, label: 'Alianza', tone: 'ally' },
+    { from: 0, to: 2, label: 'Intercambio', tone: 'trade' },
+    { from: 1, to: 4, label: 'Fricción', tone: 'tension' },
+    { from: 3, to: 0, label: 'Legitimidad', tone: 'ally' },
+    { from: 4, to: 2, label: 'Influencia', tone: 'influence' },
+    { from: 5, to: 1, label: 'Mediación', tone: 'ally' },
+  ];
+
+  const links = Array.isArray(beatState?.links) && beatState.links.length
+    ? beatState.links.filter((l) => l && Number.isInteger(l.from) && Number.isInteger(l.to))
+    : defaultLinks;
+
+  const nodeCount = rawNodes.length;
+  const activeIdx = Number.isInteger(beatState?.activeNode)
+    ? clamp(beatState.activeNode, 0, nodeCount - 1)
+    : Number.isInteger(beatState?.focusNode)
+      ? clamp(beatState.focusNode, 0, nodeCount - 1)
+      : 0;
+
+  const cx = bounds.x + bounds.w * 0.5;
+  const cy = bounds.y + bounds.h * 0.44;
+  const rxBase = bounds.w * 0.33;
+  const ryBase = bounds.h * 0.31;
+
+  // Compute which nodes participate in tension vs alliance vs external influence
+  const rivalSet = new Set();
+  const allySet = new Set();
+  const influenceSet = new Set();
+  links.forEach((l) => {
+    if (l.tone === 'tension') {
+      rivalSet.add(l.from);
+      rivalSet.add(l.to);
+    } else if (l.tone === 'ally') {
+      allySet.add(l.from);
+      allySet.add(l.to);
+    } else if (l.tone === 'influence') {
+      influenceSet.add(l.from);
+      influenceSet.add(l.to);
+    }
+  });
+
+  const nodeColors = [
+    PALETTE.cyan,
+    PALETTE.emerald,
+    PALETTE.gold,
+    PALETTE.violet,
+    PALETTE.coral,
+    PALETTE.cyan,
+  ];
+
+  const cohesionFactor = (cohesion - 50) / 100; // -0.5 .. +0.5
+  const tensionFactor = (tension - 50) / 100;
+  const nodes = rawNodes.map((label, idx) => {
+    const angle = -Math.PI * 0.5 + (idx / nodeCount) * Math.PI * 2;
+    let radialScale = 0.88 + 0.14 * reveal;
+    if (allySet.has(idx)) radialScale -= cohesionFactor * 0.22;
+    if (rivalSet.has(idx)) radialScale += tensionFactor * 0.22;
+    radialScale = clamp(radialScale, 0.56, 1.12);
+
+    const breatheX = Math.sin(simTime * 0.85 + idx * 1.4) * (isPlaying ? 4.5 : 1.5);
+    const breatheY = Math.cos(simTime * 0.75 + idx * 1.7) * (isPlaying ? 4.0 : 1.2);
+    return {
+      idx,
+      label: String(label),
+      x: cx + Math.cos(angle) * rxBase * radialScale + breatheX,
+      y: cy + Math.sin(angle) * ryBase * radialScale + breatheY,
+      color: nodeColors[idx % nodeColors.length],
+      isExternal: influenceSet.has(idx),
+    };
+  });
+
+  // Subtle cohesion cluster halo around center
+  const haloR = Math.min(rxBase, ryBase) * (0.85 - cohesionFactor * 0.28);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(131, 193, 103, 0.18)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(40, haloR), 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  const toneStyle = {
+    ally: { color: PALETTE.emerald, dashed: false },
+    tension: { color: PALETTE.coral, dashed: true },
+    trade: { color: PALETTE.gold, dashed: false },
+    influence: { color: PALETTE.violet, dashed: false },
+  };
+
+  // Draw curved Bezier links with animated pulses & centered labels
+  links.forEach((link, lIdx) => {
+    const fromN = nodes[link.from];
+    const toN = nodes[link.to];
+    if (!fromN || !toN || link.from === link.to) return;
+
+    const style = toneStyle[link.tone] || { color: PALETTE.cyan, dashed: false };
+    const mx = (fromN.x + toN.x) * 0.5;
+    const my = (fromN.y + toN.y) * 0.5;
+    const dx = toN.x - fromN.x;
+    const dy = toN.y - fromN.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const bend = ((lIdx % 2 === 0 ? 1 : -1) * Math.min(34, len * 0.16));
+    const ctrlX = mx - (dy / len) * bend;
+    const ctrlY = my + (dx / len) * bend;
+
+    const highlighted = link.from === activeIdx || link.to === activeIdx;
+    const toneBoost = link.tone === 'tension'
+      ? 0.35 + (tension / 100) * 0.65
+      : link.tone === 'ally'
+        ? 0.35 + (cohesion / 100) * 0.65
+        : link.tone === 'influence'
+          ? 0.35 + (influence / 100) * 0.65
+          : 0.65;
+
+    ctx.save();
+    ctx.strokeStyle = style.color;
+    ctx.globalAlpha = clamp((highlighted ? 0.85 : 0.42) * toneBoost + 0.15, 0.2, 0.95);
+    ctx.lineWidth = highlighted ? 2.5 : 1.6 + toneBoost * 0.8;
+    if (style.dashed) ctx.setLineDash([7, 5]);
+    ctx.beginPath();
+    ctx.moveTo(fromN.x, fromN.y);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, toN.x, toN.y);
+    ctx.stroke();
+    ctx.restore();
+
+    // Animated signal pulse
+    const pulseRate = link.tone === 'tension'
+      ? 0.28 + (tension / 100) * 0.55
+      : 0.25 + (cohesion / 100) * 0.42;
+    const t = ((isPlaying ? simTime * pulseRate : 0.35) + lIdx * 0.23) % 1;
+    const u = 1 - t;
+    const px = u * u * fromN.x + 2 * u * t * ctrlX + t * t * toN.x;
+    const py = u * u * fromN.y + 2 * u * t * ctrlY + t * t * toN.y;
+    drawGlowDot(ctx, px, py, { color: style.color, radius: 3.1, glowRadius: 9, alpha: 0.9 });
+
+    if (link.label) {
+      const lx = 0.25 * fromN.x + 0.5 * ctrlX + 0.25 * toN.x;
+      const ly = 0.25 * fromN.y + 0.5 * ctrlY + 0.25 * toN.y;
+      drawBadgeLabel(ctx, truncateText(link.label, 18), lx, ly, {
+        color: style.color,
+        borderColor: style.color,
+        font: `600 9.5px ${FONT_SANS}`,
+        padX: 6,
+        padY: 2,
+        alpha: highlighted ? 0.96 : 0.82,
+      });
+    }
+  });
+
+  // Draw actor/concept nodes
+  let hoveredNode = null;
+  nodes.forEach((node) => {
+    const isActive = node.idx === activeIdx;
+    const isHovered = Math.hypot(pointer.x - node.x, pointer.y - node.y) < 30;
+    if (isHovered) hoveredNode = node;
+
+    if (node.isExternal) {
+      const infR = 23 + (influence / 100) * 14;
+      ctx.save();
+      ctx.strokeStyle = PALETTE.violet;
+      ctx.globalAlpha = 0.25 + (influence / 100) * 0.45;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, infR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    drawGlowDot(ctx, node.x, node.y, {
+      color: isActive ? PALETTE.gold : node.color,
+      radius: isActive || isHovered ? 16 : 13.5,
+      glowRadius: isActive ? 42 : 28,
+      ring: isActive || isHovered,
+    });
+
+    ctx.save();
+    ctx.fillStyle = PALETTE.bg;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = isActive ? PALETTE.gold : node.color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = PALETTE.text;
+    ctx.font = `700 10.5px ${FONT_MONO}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`0${node.idx + 1}`, node.x, node.y);
+    ctx.restore();
+
+    drawBadgeLabel(ctx, truncateText(node.label, 22), node.x, node.y + 27, {
+      color: isActive ? PALETTE.gold : PALETTE.text,
+      borderColor: isActive ? PALETTE.gold : 'rgba(88, 196, 221, 0.35)',
+      font: `600 10.5px ${FONT_SANS}`,
+      padX: 7,
+      padY: 3,
+    });
+  });
+
+  // Bottom HUD (Escenario, Cohesión, Tensión, Foco activo — no % or ms)
+  const scenarioLabel = beatState?.scenarioLabel || lesson?.title || 'Mapa de actores';
+  const hudY = bounds.y + bounds.h - 46;
+  drawRoundedRectPath(ctx, bounds.x + 8, hudY, bounds.w - 16, 40, 10);
+  ctx.fillStyle = PALETTE.bgPanel;
+  ctx.fill();
+  ctx.strokeStyle = tension > 72 ? 'rgba(252, 98, 85, 0.5)' : 'rgba(88, 196, 221, 0.35)';
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
+
+  const hudItems = [
+    { label: 'Escenario', val: truncateText(scenarioLabel, 20), color: PALETTE.cyan },
+    { label: 'Cohesión', val: String(Math.round(cohesion)), color: PALETTE.emerald },
+    { label: 'Tensión', val: String(Math.round(tension)), color: tension >= 65 ? PALETTE.coral : PALETTE.gold },
+    { label: 'Foco activo', val: truncateText(nodes[activeIdx]?.label || '', 20), color: PALETTE.gold },
+  ];
+  hudItems.forEach((item, i) => {
+    const mx = bounds.x + 22 + ((bounds.w - 44) * i) / 4;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.font = `500 10px ${FONT_SANS}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(item.label, mx, hudY + 13);
+    ctx.fillStyle = item.color;
+    ctx.font = `700 11.5px ${FONT_MONO}`;
+    ctx.fillText(item.val, mx, hudY + 28);
+  });
+
+  layout.handles = nodes.map((n) => ({ id: `concept_${n.idx}`, x: n.x, y: n.y, r: 28 }));
+  layout.bounds = bounds;
+
+  if (pointer.inside && hoveredNode) {
+    drawBadgeLabel(
+      ctx,
+      `${hoveredNode.label} · Clic para enfocar`,
+      hoveredNode.x,
+      hoveredNode.y - 32,
+      { color: PALETTE.gold, borderColor: PALETTE.gold, font: `600 10.5px ${FONT_SANS}` }
+    );
+  }
+}
+
+function renderTimelineArc(ctx, state, layout) {
+  const { width, height, params, pointer, beatState, entrance, simTime, isPlaying } = state;
+  const pad = 28;
+  const bounds = { x: pad, y: pad, w: width - pad * 2, h: height - pad * 2 };
+
+  drawGrid(
+    ctx,
+    {
+      originX: width * 0.5,
+      originY: height * 0.42,
+      scaleX: 52,
+      scaleY: 52,
+      width,
+      height,
+      bounds,
+    },
+    { step: 1, subdivisions: 1, showLabels: false, alpha: 0.34 }
+  );
+
+  const defaultMilestones = [
+    { era: 'Fase I', title: 'Contexto fundacional', detail: 'Se configuran las reglas de origen, los actores clave y las tensiones iniciales del período.' },
+    { era: 'Fase II', title: 'Punto de inflexión', detail: 'Un cambio estructural altera el equilibrio previo y abre nuevas alianzas estratégicas.' },
+    { era: 'Fase III', title: 'Consolidación institucional', detail: 'Las normas e instituciones absorben la presión externa y estabilizan el sistema.' },
+    { era: 'Fase IV', title: 'Reconfiguración multipolar', detail: 'Nuevos polos de influencia redefinen la agenda compartida y los márgenes de autonomía.' },
+    { era: 'Horizonte', title: 'Escenarios futuros', detail: 'El balance entre impulso de cambio y estabilidad institucional define la trayectoria venidera.' },
+  ];
+
+  const milestones = Array.isArray(beatState?.milestones) && beatState.milestones.length >= 2
+    ? beatState.milestones.slice(0, 5)
+    : defaultMilestones;
+
+  const count = milestones.length;
+  const rawFocus = state.targetParams?.eraFocus ?? params.eraFocus ?? beatState?.activeMilestone ?? 0;
+  const activeIdx = clamp(Math.round(rawFocus), 0, count - 1);
+  const smoothFocus = clamp(params.eraFocus ?? activeIdx, 0, count - 1);
+  const momentum = clamp(params.momentum ?? 65, 0, 100);
+  const continuity = clamp(params.continuity ?? 55, 0, 100);
+  const reveal = easeOutCubic(clamp(entrance * 1.15, 0, 1));
+
+  // Arc geometry in upper canvas band (leaves bottom band clear for glass detail card + HUD)
+  const arcLeft = bounds.x + 48;
+  const arcRight = bounds.x + bounds.w - 48;
+  const arcBaseY = bounds.y + bounds.h * 0.40;
+  const arcLift = bounds.h * 0.17;
+  const momentumBias = ((momentum - 50) / 50) * 18;
+  const continuitySmooth = (continuity / 100);
+
+  const pts = milestones.map((m, idx) => {
+    const t = count > 1 ? idx / (count - 1) : 0.5;
+    const x = lerp(arcLeft, arcRight, t);
+    const wave = Math.sin(t * Math.PI) * arcLift + Math.sin(t * Math.PI * 2.2) * (1 - continuitySmooth) * 14;
+    const slope = t * momentumBias * 0.65;
+    const y = arcBaseY - wave - slope;
+    return {
+      idx,
+      era: String(m?.era || `Hito ${idx + 1}`),
+      title: String(m?.title || `Etapa ${idx + 1}`),
+      detail: String(m?.detail || ''),
+      x,
+      y,
+    };
+  });
+
+  // Draw smooth timeline spine (past solid + future dashed + future branching trajectories)
+  const sampleCurveAt = (fracIdx) => {
+    const i0 = Math.floor(clamp(fracIdx, 0, count - 1));
+    const i1 = Math.min(count - 1, i0 + 1);
+    const localT = clamp(fracIdx - i0, 0, 1);
+    return {
+      x: lerp(pts[i0].x, pts[i1].x, localT),
+      y: lerp(pts[i0].y, pts[i1].y, easeInOutCubic(localT)),
+    };
+  };
+
+  // Future dashed spine
+  ctx.save();
+  ctx.strokeStyle = 'rgba(154, 114, 172, 0.55)';
+  ctx.lineWidth = 2.2;
+  ctx.setLineDash([7, 6]);
+  ctx.beginPath();
+  for (let s = 0; s <= 60; s++) {
+    const f = lerp(smoothFocus, count - 1, s / 60);
+    const p = sampleCurveAt(f);
+    if (s === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Branching trajectory past last milestone driven by momentum & continuity
+  const lastPt = pts[count - 1];
+  const branchEndX = Math.min(bounds.x + bounds.w - 10, lastPt.x + 36);
+  const upEndY = clamp(lastPt.y - 12 - (momentum / 100) * 32, bounds.y + 22, arcBaseY + 20);
+  const steadyEndY = clamp(lastPt.y + (1 - continuity / 100) * 26, bounds.y + 24, arcBaseY + 34);
+
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = PALETTE.emerald;
+  ctx.beginPath();
+  ctx.moveTo(lastPt.x, lastPt.y);
+  ctx.quadraticCurveTo(lerp(lastPt.x, branchEndX, 0.5), lastPt.y - 6, branchEndX, upEndY);
+  ctx.stroke();
+
+  ctx.strokeStyle = PALETTE.coral;
+  ctx.beginPath();
+  ctx.moveTo(lastPt.x, lastPt.y);
+  ctx.quadraticCurveTo(lerp(lastPt.x, branchEndX, 0.5), lastPt.y + 6, branchEndX, steadyEndY);
+  ctx.stroke();
+  ctx.restore();
+
+  // Past glowing solid progression curve
+  const drawnEnd = Math.max(0.02, smoothFocus * reveal);
+  ctx.save();
+  ctx.strokeStyle = PALETTE.cyan;
+  ctx.lineWidth = 3.2;
+  ctx.shadowColor = PALETTE.cyan;
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  for (let s = 0; s <= 60; s++) {
+    const f = lerp(0, drawnEnd, s / 60);
+    const p = sampleCurveAt(f);
+    if (s === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Milestone nodes along arc
+  let hoveredPt = null;
+  pts.forEach((pt) => {
+    const isPast = pt.idx < activeIdx;
+    const isActive = pt.idx === activeIdx;
+    const isHovered = Math.hypot(pointer.x - pt.x, pointer.y - pt.y) < 26;
+    if (isHovered) hoveredPt = pt;
+
+    const col = isActive ? PALETTE.gold : isPast ? PALETTE.cyan : PALETTE.violet;
+    drawGlowDot(ctx, pt.x, pt.y, {
+      color: col,
+      radius: isActive ? 8.5 : isHovered ? 7 : 5.5,
+      glowRadius: isActive ? 28 : 16,
+      ring: isActive || isHovered,
+      alpha: isActive || isPast ? 1 : 0.8,
+    });
+
+    drawBadgeLabel(ctx, truncateText(pt.era, 14), pt.x, pt.y - 24, {
+      color: isActive ? PALETTE.gold : PALETTE.muted,
+      borderColor: isActive ? PALETTE.gold : 'rgba(88, 196, 221, 0.28)',
+      font: `700 10px ${FONT_MONO}`,
+      padX: 7,
+      padY: 2,
+    });
+
+    if (pt.idx === activeIdx || count <= 5) {
+      drawBadgeLabel(ctx, truncateText(pt.title, 18), pt.x, pt.y + 24, {
+        color: isActive ? PALETTE.text : PALETTE.dim,
+        borderColor: isActive ? 'rgba(247, 201, 72, 0.5)' : 'rgba(92, 114, 153, 0.2)',
+        font: `600 9.5px ${FONT_SANS}`,
+        padX: 6,
+        padY: 2,
+        alpha: isActive ? 0.98 : 0.72,
+      });
+    }
+  });
+
+  // Smoothly gliding cursor along the arc
+  const cursorPt = sampleCurveAt(smoothFocus);
+  const pulse = isPlaying ? 1 + 0.15 * Math.sin(simTime * 4) : 1;
+  drawGlowDot(ctx, cursorPt.x, cursorPt.y, {
+    color: PALETTE.gold,
+    radius: 6 * pulse,
+    glowRadius: 24,
+  });
+
+  // Translucent glass detail card for active milestone (above bottom HUD)
+  const activeM = pts[activeIdx] || pts[0];
+  const hudY = bounds.y + bounds.h - 44;
+  const cardH = Math.min(104, Math.max(76, bounds.h * 0.24));
+  const cardY = hudY - cardH - 12;
+  const cardX = bounds.x + 14;
+  const cardW = bounds.w - 28;
+
+  drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, 12);
+  ctx.fillStyle = PALETTE.bgPanel;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(247, 201, 72, 0.45)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  drawBadgeLabel(ctx, activeM.era, cardX + 14, cardY + 20, {
+    align: 'left',
+    color: PALETTE.gold,
+    borderColor: PALETTE.gold,
+    font: `700 10.5px ${FONT_MONO}`,
+    padX: 8,
+    padY: 2,
+  });
+
+  ctx.fillStyle = PALETTE.text;
+  ctx.font = `700 13.5px ${FONT_SANS}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(truncateText(activeM.title, 64), cardX + 114, cardY + 20);
+
+  ctx.fillStyle = PALETTE.muted;
+  ctx.font = `400 12px ${FONT_SANS}`;
+  ctx.textBaseline = 'top';
+  const detailLines = wrapTextLines(ctx, activeM.detail, cardW - 28, 3);
+  detailLines.forEach((line, lIdx) => {
+    ctx.fillText(line, cardX + 14, cardY + 39 + lIdx * 17);
+  });
+
+  // Bottom HUD
+  drawRoundedRectPath(ctx, bounds.x + 8, hudY, bounds.w - 16, 38, 10);
+  ctx.fillStyle = PALETTE.bgPanel;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(88, 196, 221, 0.35)';
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
+
+  const timelineHud = [
+    { label: 'Hito activo', val: `${activeIdx + 1}/${count} · ${truncateText(activeM.era, 12)}`, color: PALETTE.gold },
+    { label: 'Impulso', val: String(Math.round(momentum)), color: PALETTE.emerald },
+    { label: 'Estabilidad', val: String(Math.round(continuity)), color: PALETTE.cyan },
+  ];
+  timelineHud.forEach((item, i) => {
+    const mx = bounds.x + 24 + ((bounds.w - 48) * i) / 3;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.font = `500 10px ${FONT_SANS}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(item.label, mx, hudY + 12);
+    ctx.fillStyle = item.color;
+    ctx.font = `700 11.5px ${FONT_MONO}`;
+    ctx.fillText(item.val, mx, hudY + 26);
+  });
+
+  layout.handles = pts.map((pt) => ({ id: `milestone_${pt.idx}`, x: pt.x, y: pt.y, r: 26 }));
+  layout.bounds = bounds;
+
+  if (pointer.inside && hoveredPt) {
+    drawBadgeLabel(ctx, `Clic: ${hoveredPt.era}`, hoveredPt.x, hoveredPt.y - 46, {
+      color: PALETTE.gold,
+      borderColor: PALETTE.gold,
+      font: `600 10px ${FONT_SANS}`,
+    });
+  }
+}
+
+function renderTensionMatrix(ctx, state, layout) {
+  const { width, height, params, pointer, beatState, simTime, isPlaying, entrance } = state;
+  const padL = 54;
+  const padR = 32;
+  const padT = 40;
+  const hudH = 42;
+  const padB = hudH + 34;
+  const bounds = { x: padL, y: padT, w: width - padL - padR, h: height - padT - padB };
+
+  const axisX = clamp(params.axisX ?? 55, 0, 100);
+  const axisY = clamp(params.axisY ?? 60, 0, 100);
+  const volatility = clamp(params.volatility ?? 40, 0, 100);
+  const reveal = easeOutCubic(clamp(entrance * 1.15, 0, 1));
+
+  const xAxisLabel = String(beatState?.xAxis || 'Autonomía nacional ↔ Integración regional');
+  const yAxisLabel = String(beatState?.yAxis || 'Corto plazo ↔ Visión de Estado');
+  const quadrants = Array.isArray(beatState?.quadrants) && beatState.quadrants.length >= 4
+    ? beatState.quadrants.slice(0, 4).map((q) => String(q))
+    : [
+        'Soberanía de largo plazo',
+        'Integración estratégica',
+        'Aislamiento táctico',
+        'Apertura coyuntural',
+      ];
+  const items = Array.isArray(beatState?.items) && beatState.items.length
+    ? beatState.items
+    : [
+        { label: 'Consenso', x: 74, y: 76 },
+        { label: 'Bloque', x: 68, y: 42 },
+        { label: 'Protección', x: 24, y: 66 },
+        { label: 'Coyuntura', x: 34, y: 28 },
+      ];
+
+  const toScreen = (vx, vy) => ({
+    sx: bounds.x + (clamp(vx, 0, 100) / 100) * bounds.w,
+    sy: bounds.y + bounds.h - (clamp(vy, 0, 100) / 100) * bounds.h,
+  });
+
+  // Subtle matrix backdrop & 4 quadrant tints
+  const midX = bounds.x + bounds.w * 0.5;
+  const midY = bounds.y + bounds.h * 0.5;
+  const quadW = bounds.w * 0.5;
+  const quadH = bounds.h * 0.5;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(154, 114, 172, 0.07)';
+  ctx.fillRect(bounds.x, bounds.y, quadW, quadH); // Top-Left
+  ctx.fillStyle = 'rgba(131, 193, 103, 0.09)';
+  ctx.fillRect(midX, bounds.y, quadW, quadH); // Top-Right
+  ctx.fillStyle = 'rgba(252, 98, 85, 0.06)';
+  ctx.fillRect(bounds.x, midY, quadW, quadH); // Bottom-Left
+  ctx.fillStyle = 'rgba(88, 196, 221, 0.07)';
+  ctx.fillRect(midX, midY, quadW, quadH); // Bottom-Right
+
+  // Grid subdivisions
+  ctx.strokeStyle = PALETTE.gridMinor;
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    if (i === 2) continue;
+    const gx = bounds.x + (bounds.w * i) / 4;
+    const gy = bounds.y + (bounds.h * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(gx, bounds.y);
+    ctx.lineTo(gx, bounds.y + bounds.h);
+    ctx.moveTo(bounds.x, gy);
+    ctx.lineTo(bounds.x + bounds.w, gy);
+    ctx.stroke();
+  }
+
+  // Outer border & central quadrant axes
+  ctx.strokeStyle = 'rgba(88, 196, 221, 0.35)';
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+
+  ctx.strokeStyle = PALETTE.axis;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(midX, bounds.y);
+  ctx.lineTo(midX, bounds.y + bounds.h);
+  ctx.moveTo(bounds.x, midY);
+  ctx.lineTo(bounds.x + bounds.w, midY);
+  ctx.stroke();
+  ctx.restore();
+
+  // Quadrant banners
+  const activeQuadIdx = axisY >= 50 ? (axisX < 50 ? 0 : 1) : (axisX < 50 ? 2 : 3);
+  const quadCenters = [
+    { x: bounds.x + 12, y: bounds.y + 18, align: 'left', col: PALETTE.violet },
+    { x: bounds.x + bounds.w - 12, y: bounds.y + 18, align: 'right', col: PALETTE.emerald },
+    { x: bounds.x + 12, y: bounds.y + bounds.h - 18, align: 'left', col: PALETTE.coral },
+    { x: bounds.x + bounds.w - 12, y: bounds.y + bounds.h - 18, align: 'right', col: PALETTE.cyan },
+  ];
+  quadCenters.forEach((qc, qIdx) => {
+    const active = qIdx === activeQuadIdx;
+    drawBadgeLabel(ctx, truncateText(quadrants[qIdx], 26), qc.x, qc.y, {
+      align: qc.align,
+      color: active ? PALETTE.gold : qc.col,
+      borderColor: active ? PALETTE.gold : 'rgba(147, 166, 200, 0.24)',
+      font: `600 10px ${FONT_SANS}`,
+      padX: 7,
+      padY: 3,
+      alpha: active ? 0.98 : 0.72,
+    });
+  });
+
+  // Axis labels
+  ctx.save();
+  ctx.fillStyle = PALETTE.muted;
+  ctx.font = `600 11px ${FONT_SANS}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(truncateText(xAxisLabel, 56), midX, bounds.y + bounds.h + 15);
+
+  ctx.translate(bounds.x - 24, midY);
+  ctx.rotate(-Math.PI * 0.5);
+  ctx.fillText(truncateText(yAxisLabel, 44), 0, 0);
+  ctx.restore();
+
+  // Plot actor / case items
+  items.forEach((item, idx) => {
+    if (!item || typeof item !== 'object') return;
+    const pt = toScreen(
+      lerp(50, Number(item.x ?? 50), reveal),
+      lerp(50, Number(item.y ?? 50), reveal)
+    );
+    const isFocusItem = beatState?.focusItem === idx;
+    const col = isFocusItem ? PALETTE.cyan : PALETTE.muted;
+    drawGlowDot(ctx, pt.sx, pt.sy, {
+      color: col,
+      radius: isFocusItem ? 5.5 : 4.2,
+      glowRadius: isFocusItem ? 18 : 11,
+    });
+    drawBadgeLabel(ctx, truncateText(item.label || `Caso ${idx + 1}`, 20), pt.sx, pt.sy - 16, {
+      color: isFocusItem ? PALETTE.cyan : PALETTE.text,
+      borderColor: isFocusItem ? PALETTE.cyan : 'rgba(147, 166, 200, 0.25)',
+      font: `600 9.5px ${FONT_SANS}`,
+      padX: 6,
+      padY: 2,
+      alpha: 0.9,
+    });
+  });
+
+  // Interactive focal marker with volatility uncertainty halo
+  const focusPt = toScreen(axisX, axisY);
+  const pulse = isPlaying ? 1 + 0.09 * Math.sin(simTime * 3.8) : 1;
+  const haloR = (14 + (volatility / 100) * 48) * pulse;
+
+  ctx.save();
+  const haloGrad = ctx.createRadialGradient(focusPt.sx, focusPt.sy, 4, focusPt.sx, focusPt.sy, haloR);
+  haloGrad.addColorStop(0, 'rgba(247, 201, 72, 0.34)');
+  haloGrad.addColorStop(0.6, 'rgba(252, 98, 85, 0.14)');
+  haloGrad.addColorStop(1, 'rgba(9, 13, 22, 0)');
+  ctx.fillStyle = haloGrad;
+  ctx.beginPath();
+  ctx.arc(focusPt.sx, focusPt.sy, haloR, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = volatility > 65 ? PALETTE.coral : PALETTE.gold;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(focusPt.sx, focusPt.sy, haloR, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  const hoverFocus = Math.hypot(pointer.x - focusPt.sx, pointer.y - focusPt.sy) < 24;
+  drawGlowDot(ctx, focusPt.sx, focusPt.sy, {
+    color: PALETTE.gold,
+    radius: hoverFocus || layout.dragTarget === 'tension_focus' ? 8 : 6.5,
+    glowRadius: 24,
+    ring: true,
+  });
+
+  // Bottom HUD
+  const hudY = height - hudH - 12;
+  drawRoundedRectPath(ctx, bounds.x, hudY, bounds.w, hudH - 4, 10);
+  ctx.fillStyle = PALETTE.bgPanel;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(247, 201, 72, 0.38)';
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
+
+  const matHud = [
+    { label: 'Cuadrante activo', val: truncateText(quadrants[activeQuadIdx], 24), color: PALETTE.gold },
+    { label: 'Equilibrio X / Y', val: `${Math.round(axisX)} / ${Math.round(axisY)}`, color: PALETTE.cyan },
+    { label: 'Presión', val: String(Math.round(volatility)), color: volatility >= 65 ? PALETTE.coral : PALETTE.emerald },
+  ];
+  matHud.forEach((item, i) => {
+    const mx = bounds.x + 16 + ((bounds.w - 32) * i) / 3;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.font = `500 10px ${FONT_SANS}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(item.label, mx, hudY + 12);
+    ctx.fillStyle = item.color;
+    ctx.font = `700 11.5px ${FONT_MONO}`;
+    ctx.fillText(item.val, mx, hudY + 26);
+  });
+
+  layout.matrixBox = bounds;
+  layout.handles = [{ id: 'tension_focus', x: focusPt.sx, y: focusPt.sy, r: 26 }];
+
+  if (
+    pointer.inside &&
+    pointer.x >= bounds.x &&
+    pointer.x <= bounds.x + bounds.w &&
+    pointer.y >= bounds.y &&
+    pointer.y <= bounds.y + bounds.h
+  ) {
+    const hx = clamp(((pointer.x - bounds.x) / bounds.w) * 100, 0, 100);
+    const hy = clamp(((bounds.y + bounds.h - pointer.y) / bounds.h) * 100, 0, 100);
+    drawHoverCrosshair(ctx, pointer.x, pointer.y, bounds, `X=${Math.round(hx)} · Y=${Math.round(hy)}`);
+  }
+}
+
 const RENDER_FN_MAP = {
   vector_space: renderVectorSpace,
   calculus_curve: renderCalculusCurve,
@@ -1978,6 +2769,9 @@ const RENDER_FN_MAP = {
   probability_dist: renderProbabilityDist,
   compound_growth: renderCompoundGrowth,
   system_flow: renderSystemFlow,
+  concept_map: renderConceptMap,
+  timeline_arc: renderTimelineArc,
+  tension_matrix: renderTensionMatrix,
 };
 
 export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
@@ -2010,6 +2804,7 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
     heatmapBox: null,
     bayesBox: null,
     growthBounds: null,
+    matrixBox: null,
     bounds: null,
   };
 
@@ -2104,6 +2899,13 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
     state.beatIndex = 0;
     state.beatState = {};
     layout.dragTarget = null;
+    layout.handles = [];
+    layout.view = null;
+    layout.heatmapBox = null;
+    layout.bayesBox = null;
+    layout.growthBounds = null;
+    layout.matrixBox = null;
+    layout.bounds = null;
 
     if (Array.isArray(lesson?.beats) && lesson.beats.length > 0) {
       setBeat(lesson.beats[0], 0);
@@ -2130,6 +2932,13 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
         applyParamInternal(key, val, false);
       }
     });
+    if (
+      state.renderer === 'timeline_arc' &&
+      Number.isInteger(sceneState.activeMilestone) &&
+      !('eraFocus' in paramOverrides)
+    ) {
+      applyParamInternal('eraFocus', sceneState.activeMilestone, false);
+    }
     drawOnce();
   }
 
@@ -2163,6 +2972,30 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
 
     for (const handle of layout.handles) {
       if (Math.hypot(x - handle.x, y - handle.y) <= (handle.r || 20)) {
+        if (handle.id.startsWith('concept_')) {
+          const idx = Number(handle.id.replace('concept_', ''));
+          if (Number.isInteger(idx)) {
+            state.beatState = { ...state.beatState, activeNode: idx };
+            drawOnce();
+          }
+          return;
+        }
+        if (handle.id.startsWith('milestone_')) {
+          const idx = Number(handle.id.replace('milestone_', ''));
+          if (Number.isInteger(idx)) {
+            emitParamChange('eraFocus', idx);
+            drawOnce();
+          }
+          return;
+        }
+        if (handle.id.startsWith('node_')) {
+          const idx = Number(handle.id.replace('node_', ''));
+          if (Number.isInteger(idx)) {
+            state.beatState = { ...state.beatState, focusNode: idx };
+            drawOnce();
+          }
+          return;
+        }
         layout.dragTarget = handle.id;
         canvasEl.style.cursor = 'grabbing';
         if (typeof canvasEl.setPointerCapture === 'function') {
@@ -2176,7 +3009,7 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
       }
     }
 
-    // Fallback direct click-to-scrub on calculus, growth, neural heatmap, or bayes
+    // Fallback direct click-to-scrub on calculus, growth, neural heatmap, or tension matrix
     if (state.renderer === 'calculus_curve' && layout.view) {
       layout.dragTarget = 'x0';
       const wx = (x - layout.view.originX) / layout.view.scaleX;
@@ -2193,11 +3026,12 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
         layout.dragTarget = 'heatmap';
         emitParamChange('inputA', lerp(-1, 1, clamp((x - hb.x) / hb.size, 0, 1)));
       }
-    } else if (state.renderer === 'system_flow' && layout.bounds) {
-      const hitNode = layout.handles.find((h) => Math.hypot(x - h.x, y - h.y) <= 28);
-      if (hitNode) {
-        const idx = Number(hitNode.id.replace('node_', ''));
-        state.beatState = { ...state.beatState, focusNode: idx };
+    } else if (state.renderer === 'tension_matrix' && layout.matrixBox) {
+      const mb = layout.matrixBox;
+      if (x >= mb.x && x <= mb.x + mb.w && y >= mb.y && y <= mb.y + mb.h) {
+        layout.dragTarget = 'tension_focus';
+        emitParamChange('axisX', clamp(((x - mb.x) / mb.w) * 100, 0, 100));
+        emitParamChange('axisY', clamp(((mb.y + mb.h - y) / mb.h) * 100, 0, 100));
       }
     }
   }
@@ -2248,6 +3082,10 @@ export function createThreeBlueEngine(canvasEl, { onParamChange } = {}) {
       } else if (state.renderer === 'compound_growth' && layout.growthBounds && layout.dragTarget === 'years') {
         const gb = layout.growthBounds;
         emitParamChange('years', ((x - gb.x) / gb.w) * gb.maxYears);
+      } else if (state.renderer === 'tension_matrix' && layout.matrixBox && layout.dragTarget === 'tension_focus') {
+        const mb = layout.matrixBox;
+        emitParamChange('axisX', clamp(((x - mb.x) / mb.w) * 100, 0, 100));
+        emitParamChange('axisY', clamp(((mb.y + mb.h - y) / mb.h) * 100, 0, 100));
       }
       return;
     }

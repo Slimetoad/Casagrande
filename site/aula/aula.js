@@ -1,4 +1,4 @@
-import { createThreeBlueEngine } from './engine-3b1b.js';
+import { createThreeBlueEngine } from './engine-3b1b.js?v=aula-qual-3';
 import {
   createAvatarKokoroController,
   VOICE_PROFILES,
@@ -388,12 +388,15 @@ const OFFLINE_CURATED_COURSES = [
 ];
 
 const RENDERER_LABELS = {
-  vector_space: 'Espacio Vectorial',
-  calculus_curve: 'Cálculo Visual',
-  neural_network: 'Red Neuronal',
-  probability_dist: 'Bayes & Probabilidad',
-  compound_growth: 'Crecimiento & VPN',
-  system_flow: 'Flujos & Sistemas'
+  vector_space: 'Espacio vectorial',
+  calculus_curve: 'Cálculo visual',
+  neural_network: 'Red neuronal',
+  probability_dist: 'Probabilidad y Bayes',
+  compound_growth: 'Crecimiento compuesto',
+  system_flow: 'Flujo de sistema',
+  concept_map: 'Mapa de actores',
+  timeline_arc: 'Línea de tiempo',
+  tension_matrix: 'Matriz estratégica'
 };
 
 const state = {
@@ -527,18 +530,38 @@ async function resolveAppConfig() {
   return { apiBase, voicePhone };
 }
 
-function renderLatex(latex, targetEl) {
+function isMathExpression(expr) {
+  const text = String(expr || '').trim();
+  if (!text) return false;
+  if (/\\(?:frac|vec|det|sigma|Delta|times|cdot|lim|sum|int|hat|text|begin|end|approx|le|ge|to|implies|mid|neg|partial|eta|Phi|alpha|beta|lambda)\b/.test(text)) {
+    return true;
+  }
+  if (/[\\^_=]/.test(text)) return true;
+  if (/\b[fPg]\([a-zA-Z0-9_,\s]+\)/.test(text)) return true;
+  return false;
+}
+
+function renderLatex(expr, targetEl) {
   if (!targetEl) return;
-  const cleanLatex = String(latex || '').trim();
-  if (!cleanLatex) {
+  const cleanExpr = String(expr || '').trim();
+  if (!cleanExpr) {
     targetEl.textContent = '';
+    targetEl.classList.remove('is-concept-thesis');
     targetEl.hidden = true;
     return;
   }
   targetEl.hidden = false;
+
+  if (!isMathExpression(cleanExpr)) {
+    targetEl.classList.add('is-concept-thesis');
+    targetEl.textContent = cleanExpr;
+    return;
+  }
+
+  targetEl.classList.remove('is-concept-thesis');
   if (typeof window !== 'undefined' && window.katex && typeof window.katex.render === 'function') {
     try {
-      window.katex.render(cleanLatex, targetEl, {
+      window.katex.render(cleanExpr, targetEl, {
         throwOnError: false,
         displayMode: false
       });
@@ -547,12 +570,18 @@ function renderLatex(latex, targetEl) {
       // Fallback below
     }
   }
-  targetEl.textContent = cleanLatex;
+  targetEl.textContent = cleanExpr;
 }
 
 function formatParamValue(val, def) {
   const num = Number(val);
   if (!Number.isFinite(num)) return String(val ?? '');
+  if (def?.id === 'eraFocus') {
+    return `Hito ${Math.round(num) + 1}`;
+  }
+  if (def?.unit === '$') {
+    return `$${Math.round(num).toLocaleString('en-US')}`;
+  }
   const step = Number(def?.step) || 0.1;
   const decimals = step < 1 ? Math.min(2, (String(step).split('.')[1] || '').length) : 0;
   const formatted = num.toFixed(decimals);
@@ -1069,7 +1098,10 @@ function loadLessonAt(lessonIdx) {
   if (els.studioLessonTitle) els.studioLessonTitle.textContent = lesson.title || `Lección ${state.lessonIndex + 1}`;
   if (els.explorePrompt) els.explorePrompt.textContent = lesson.explorePrompt || '';
   if (els.lessonSummaryText) els.lessonSummaryText.textContent = lesson.summary || '';
-  if (els.lessonRendererTag) els.lessonRendererTag.textContent = lesson.renderer || 'system_flow';
+  if (els.lessonRendererTag) {
+    const rendererKey = lesson.renderer || 'system_flow';
+    els.lessonRendererTag.textContent = RENDERER_LABELS[rendererKey] || rendererKey;
+  }
 
   if (els.lessonPills) {
     els.lessonPills.querySelectorAll('.lesson-pill').forEach((btn, idx) => {
@@ -1157,19 +1189,180 @@ function exitToGallery() {
   if (els.creatorSection) els.creatorSection.hidden = false;
 }
 
+function buildQualitativeFallbackLesson(renderer, topic) {
+  if (renderer === 'concept_map') {
+    return {
+      id: 'local-l1',
+      title: `Actores y fuerzas clave en ${topic}`,
+      summary: `Mapea las relaciones de cooperación, influencia y tensión que explican ${topic}.`,
+      renderer: 'concept_map',
+      equation: `${topic}: Cohesión ↔ Tensión estratégica entre actores`,
+      explorePrompt: 'Ajusta cohesión, tensión e influencia externa o haz clic sobre un actor en el mapa.',
+      params: [
+        { id: 'cohesion', label: 'Cohesión / Alianzas', min: 0, max: 100, step: 5, default: 60, unit: '' },
+        { id: 'tension', label: 'Tensión estratégica', min: 0, max: 100, step: 5, default: 45, unit: '' },
+        { id: 'influence', label: 'Influencia externa', min: 0, max: 100, step: 5, default: 55, unit: '' }
+      ],
+      beats: [
+        {
+          t: 0,
+          title: 'Mapa de actores',
+          caption: `Identificamos los polos centrales que estructuran ${topic}.`,
+          equation: `${topic}: Red de alianzas y contrapesos`,
+          mood: 'curious',
+          speechText: `Para comprender ${topic}, empezamos trazando los actores principales y cómo circulan las alianzas o tensiones entre ellos.`,
+          sceneState: { cohesion: 60, tension: 45, influence: 55 }
+        },
+        {
+          t: 11,
+          title: 'Dinámica de presiones',
+          caption: 'Cuando la influencia externa sube, las alianzas se reconfiguran.',
+          equation: 'Equilibrio institucional frente a presiones externas',
+          mood: 'emphatic',
+          speechText: 'Al aumentar la tensión estratégica o la influencia externa, observa qué nodos concentran el peso de la decisión.',
+          sceneState: { cohesion: 45, tension: 75, influence: 75 }
+        }
+      ],
+      quiz: {
+        question: `¿Por qué conviene analizar ${topic} como un sistema de actores y fuerzas?`,
+        options: [
+          'Porque permite anticipar efectos indirectos, alianzas y puntos de tensión entre actores',
+          'Porque reduce cualquier fenómeno social a una única constante fija',
+          'Porque elimina la influencia del contexto institucional',
+          'Porque evita comparar perspectivas distintas'
+        ],
+        correctIndex: 0,
+        explanation: 'Un mapa de actores revela cómo la cohesión interna y la presión externa modifican las decisiones colectivas.'
+      }
+    };
+  }
+
+  if (renderer === 'timeline_arc') {
+    return {
+      id: 'local-l1',
+      title: `Evolución e hitos de ${topic}`,
+      summary: `Recorre las etapas decisivas que moldearon ${topic} y proyecta su trayectoria futura.`,
+      renderer: 'timeline_arc',
+      equation: `${topic}: Continuidad histórica → Puntos de inflexión`,
+      explorePrompt: 'Desliza el hito histórico o ajusta el impulso de cambio para evaluar la trayectoria.',
+      params: [
+        { id: 'eraFocus', label: 'Hito histórico', min: 0, max: 4, step: 1, default: 0, unit: '' },
+        { id: 'momentum', label: 'Impulso de cambio', min: 0, max: 100, step: 5, default: 65, unit: '' },
+        { id: 'continuity', label: 'Estabilidad institucional', min: 0, max: 100, step: 5, default: 55, unit: '' }
+      ],
+      beats: [
+        {
+          t: 0,
+          title: 'Raíces históricas',
+          caption: `Todo proceso en ${topic} responde a equilibrios previos e hitos fundacionales.`,
+          equation: 'Memoria institucional como punto de partida',
+          mood: 'curious',
+          speechText: `Comenzamos el recorrido de ${topic} observando los hitos tempranos que fijaron las reglas del debate actual.`,
+          sceneState: { eraFocus: 0, momentum: 60, continuity: 65 }
+        },
+        {
+          t: 11,
+          title: 'Punto de inflexión',
+          caption: 'El impulso de cambio y la estabilidad definen los escenarios venideros.',
+          equation: 'Trayectoria futura = Impulso de cambio vs. Estabilidad',
+          mood: 'excited',
+          speechText: 'Al avanzar por los hitos siguientes, observa cómo interactúan el impulso reformador y la continuidad institucional.',
+          sceneState: { eraFocus: 3, momentum: 78, continuity: 50 }
+        }
+      ],
+      quiz: {
+        question: `¿Qué aporta analizar los puntos de inflexión históricos en ${topic}?`,
+        options: [
+          'Explica qué factores aceleran cambios estructurales y cuáles sostienen continuidad',
+          'Demuestra que la historia se repite sin intervención de actores',
+          'Impide proyectar escenarios futuros',
+          'Sustituye la evidencia documental'
+        ],
+        correctIndex: 0,
+        explanation: 'Comparar hitos revela cómo se combinan el impulso de cambio y la estabilidad institucional.'
+      }
+    };
+  }
+
+  return {
+    id: 'local-l1',
+    title: `Matriz estratégica de ${topic}`,
+    summary: `Evalúa dilemas y compensaciones entre ejes clave en ${topic}.`,
+    renderer: 'tension_matrix',
+    equation: `${topic}: Equilibrio estratégico entre prioridades en competencia`,
+    explorePrompt: 'Arrastra el marcador estratégico en los cuadrantes o ajusta los ejes X/Y y la presión del entorno.',
+    params: [
+      { id: 'axisX', label: 'Eje estratégico X', min: 0, max: 100, step: 5, default: 55, unit: '' },
+      { id: 'axisY', label: 'Eje estratégico Y', min: 0, max: 100, step: 5, default: 60, unit: '' },
+      { id: 'volatility', label: 'Presión del entorno', min: 0, max: 100, step: 5, default: 40, unit: '' }
+    ],
+    beats: [
+      {
+        t: 0,
+        title: 'Cuadrantes de decisión',
+        caption: `Ubicamos actores y posturas de ${topic} frente a dos ejes en tensión.`,
+        equation: 'Dilema estratégico: Prioridad X frente a Prioridad Y',
+        mood: 'curious',
+        speechText: `En ${topic}, las decisiones rara vez son absolutas: requieren equilibrar dos objetivos que compiten en una matriz de cuadrantes.`,
+        sceneState: { axisX: 55, axisY: 60, volatility: 40 }
+      },
+      {
+        t: 11,
+        title: 'Presión del entorno',
+        caption: 'Mayor incertidumbre amplía el margen de riesgo alrededor de la postura elegida.',
+        equation: 'Posicionamiento robusto bajo incertidumbre',
+        mood: 'emphatic',
+        speechText: 'Al aumentar la presión del entorno, observa cómo crece el halo de incertidumbre y exige estrategias más adaptables.',
+        sceneState: { axisX: 72, axisY: 68, volatility: 70 }
+      }
+    ],
+    quiz: {
+      question: `¿Para qué sirve una matriz de tensión estratégica en ${topic}?`,
+      options: [
+        'Para comparar opciones reales equilibrando dos criterios en competencia y el riesgo del entorno',
+        'Para eliminar todas las compensaciones de una decisión',
+        'Para reemplazar el criterio directivo por una fórmula única',
+        'Para ignorar la volatilidad del contexto'
+      ],
+      correctIndex: 0,
+      explanation: 'La matriz visualiza compensaciones entre ejes y muestra qué tan sensible es cada posición ante cambios del entorno.'
+    }
+  };
+}
+
 function buildLocalFallbackCourse({ topic, programSlug, level, voiceId }) {
   const prog = state.programs.find((p) => p.slug === programSlug) || null;
-  const t = String(topic || '').toLowerCase();
+  const t = String(topic || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
   let renderer = 'system_flow';
   if (/algebra|matriz|vector|eigen/.test(t)) renderer = 'vector_space';
   else if (/calculo|derivada|integral|gradiente/.test(t)) renderer = 'calculus_curve';
-  else if (/red|neuronal|ia|deep|backprop/.test(t)) renderer = 'neural_network';
-  else if (/bayes|probabil|estadist|normal/.test(t)) renderer = 'probability_dist';
+  else if (/red|neuronal|deep|backprop/.test(t)) renderer = 'neural_network';
+  else if (/bayes|probabil|estadist|gauss/.test(t)) renderer = 'probability_dist';
   else if (/finanz|vpn|interes|capital/.test(t)) renderer = 'compound_growth';
+  else if (/historia|evolucion|cronologia|siglo|decada|origen|reforma/.test(t)) renderer = 'timeline_arc';
+  else if (/tension|dilema|equilibrio|tradeoff|cuadrante|estrategia/.test(t)) renderer = 'tension_matrix';
+  else if (/geopolitica|america latina|latam|relaciones internacionales|diplomacia|politica|derecho|constitucional|juridico|comunicacion|periodismo|liderazgo|cultura|etica|filosofia|sociologia|gobernanza|educacion|pedagogia/.test(t)) {
+    renderer = 'concept_map';
+  } else if (/\bia\b|inteligencia artificial|generativa/.test(t)) {
+    renderer = 'neural_network';
+  }
 
-  const baseCourse =
-    OFFLINE_CURATED_COURSES.find((c) => c.renderer === renderer) || OFFLINE_CURATED_COURSES[5];
-  const baseLesson = baseCourse.lessons[0];
+  let fallbackLesson;
+  if (renderer === 'concept_map' || renderer === 'timeline_arc' || renderer === 'tension_matrix') {
+    fallbackLesson = buildQualitativeFallbackLesson(renderer, topic);
+  } else {
+    const baseCourse =
+      OFFLINE_CURATED_COURSES.find((c) => c.renderer === renderer) || OFFLINE_CURATED_COURSES[5];
+    fallbackLesson = {
+      ...baseCourse.lessons[0],
+      id: 'local-l1',
+      title: `Intuición visual de ${topic}`,
+      summary: `Explora los principios fundamentales de ${topic} manipulando el modelo interactivo.`
+    };
+  }
 
   return {
     id: `local-${Date.now().toString(36)}`,
@@ -1183,14 +1376,7 @@ function buildLocalFallbackCourse({ topic, programSlug, level, voiceId }) {
     voiceId,
     source: 'template',
     renderer,
-    lessons: [
-      {
-        ...baseLesson,
-        id: 'local-l1',
-        title: `Intuición visual de ${topic}`,
-        summary: `Explora los principios fundamentales de ${topic} manipulando el modelo interactivo.`
-      }
-    ]
+    lessons: [fallbackLesson]
   };
 }
 

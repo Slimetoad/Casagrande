@@ -962,6 +962,20 @@ button {
   overflow-x: auto;
 }
 
+.stage-equation.is-concept-thesis {
+  font-family: var(--font-body);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 0.94rem;
+  line-height: 1.35;
+  color: #eef6ff;
+  border-color: rgba(88, 196, 221, 0.42);
+  border-left: 3px solid var(--amber);
+  max-width: 100%;
+  white-space: normal;
+  overflow-x: visible;
+}
+
 .stage-overlay-bottom {
   position: absolute;
   left: 0.95rem;
