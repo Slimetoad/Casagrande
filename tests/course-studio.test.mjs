@@ -510,3 +510,76 @@ test('temas cualitativos (Geopolítica de América Latina) usan renderers concep
   assert.ok(QUAL_RENDERERS.has(repaired.renderer));
   assert.ok(QUAL_RENDERERS.has(repaired.lessons[0].renderer));
 });
+
+test('generateInteractiveCourse repara JSON malformado en un segundo intento IA antes de caer a plantilla', async t => {
+  const db = openSqliteD1(':memory:');
+  t.after(() => db.close());
+
+  let callCount = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, opts) => {
+    callCount += 1;
+    const body = JSON.parse(opts.body);
+    assert.equal(body.max_tokens, 10000);
+    if (callCount === 1) {
+      // Malformed JSON with unescaped inner double quote
+      return Response.json({
+        stop_reason: 'end_turn',
+        content: [{
+          type: 'text',
+          text: '{"title":"Geopolítica de América Latina","subtitle":"Actores y bloques","renderer":"concept_map","lessons":[{"id":"l1","title":"El "giro" multipolar","summary":"Equilibrios regionales","renderer":"concept_map","equation":"Autonomía ↔ Integración"}]}',
+        }],
+      });
+    }
+    return Response.json({
+      stop_reason: 'end_turn',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          title: 'Geopolítica de América Latina',
+          subtitle: 'Actores, comercio y bloques regionales',
+          renderer: 'concept_map',
+          lessons: [
+            {
+              id: 'l1',
+              title: 'El «giro» multipolar',
+              summary: 'Equilibrios entre bloques regionales y potencias globales.',
+              renderer: 'concept_map',
+              equation: 'Autonomía estratégica ↔ Integración regional',
+              beats: [
+                {
+                  t: 0,
+                  title: 'Actores',
+                  caption: 'Cinco polos definen la agenda.',
+                  equation: 'Autonomía estratégica ↔ Integración regional',
+                  mood: 'curious',
+                  speechText: 'Exploramos cómo interactúan bloques regionales y potencias.',
+                  sceneState: {
+                    activeNode: 0,
+                    nodes: ['Mercosur', 'Alianza del Pacífico', 'Estados Unidos', 'China', 'OEA'],
+                    links: [{ from: 0, to: 1, label: 'Convergencia', tone: 'ally' }],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      }],
+    });
+  });
+
+  const res = await generateInteractiveCourse(db, {
+    LLM_PROVIDER: 'anthropic',
+    ANTHROPIC_API_KEY: 'test-key',
+    ANTHROPIC_MODEL: 'claude-sonnet-4-5',
+  }, {
+    topic: 'Geopolítica de América Latina',
+    level: 'Intermedio',
+    lessonCount: 3,
+    voiceId: 'ef_dora',
+  });
+
+  assert.equal(callCount, 2);
+  assert.equal(res.mode, 'anthropic');
+  assert.equal(res.course.source, 'generated');
+  assert.equal(res.course.lessons[0].renderer, 'concept_map');
+});

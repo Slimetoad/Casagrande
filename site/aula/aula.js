@@ -1,4 +1,4 @@
-import { createThreeBlueEngine } from './engine-3b1b.js?v=aula-qual-3';
+import { createThreeBlueEngine } from './engine-3b1b.js?v=aula-qual-4';
 import {
   createAvatarKokoroController,
   VOICE_PROFILES,

@@ -2075,10 +2075,12 @@ function renderConceptMap(ctx, state, layout) {
       ? clamp(beatState.focusNode, 0, nodeCount - 1)
       : 0;
 
+  const topY = bounds.y + 96;
+  const bottomY = bounds.y + bounds.h - 78;
   const cx = bounds.x + bounds.w * 0.5;
-  const cy = bounds.y + bounds.h * 0.44;
-  const rxBase = bounds.w * 0.33;
-  const ryBase = bounds.h * 0.31;
+  const cy = (topY + bottomY) * 0.5;
+  const rxBase = bounds.w * 0.34;
+  const ryBase = Math.max(48, (bottomY - topY) * 0.44);
 
   // Compute which nodes participate in tension vs alliance vs external influence
   const rivalSet = new Set();
@@ -2110,10 +2112,10 @@ function renderConceptMap(ctx, state, layout) {
   const tensionFactor = (tension - 50) / 100;
   const nodes = rawNodes.map((label, idx) => {
     const angle = -Math.PI * 0.5 + (idx / nodeCount) * Math.PI * 2;
-    let radialScale = 0.88 + 0.14 * reveal;
-    if (allySet.has(idx)) radialScale -= cohesionFactor * 0.22;
-    if (rivalSet.has(idx)) radialScale += tensionFactor * 0.22;
-    radialScale = clamp(radialScale, 0.56, 1.12);
+    let radialScale = 0.86 + 0.12 * reveal;
+    if (allySet.has(idx)) radialScale -= cohesionFactor * 0.2;
+    if (rivalSet.has(idx)) radialScale += tensionFactor * 0.2;
+    radialScale = clamp(radialScale, 0.56, 1.04);
 
     const breatheX = Math.sin(simTime * 0.85 + idx * 1.4) * (isPlaying ? 4.5 : 1.5);
     const breatheY = Math.cos(simTime * 0.75 + idx * 1.7) * (isPlaying ? 4.0 : 1.2);
@@ -2157,7 +2159,7 @@ function renderConceptMap(ctx, state, layout) {
     const dx = toN.x - fromN.x;
     const dy = toN.y - fromN.y;
     const len = Math.hypot(dx, dy) || 1;
-    const bend = ((lIdx % 2 === 0 ? 1 : -1) * Math.min(34, len * 0.16));
+    const bend = (lIdx % 2 === 0 ? 1 : -1) * clamp(len * 0.22, 26, 56);
     const ctrlX = mx - (dy / len) * bend;
     const ctrlY = my + (dx / len) * bend;
 
@@ -2192,8 +2194,10 @@ function renderConceptMap(ctx, state, layout) {
     drawGlowDot(ctx, px, py, { color: style.color, radius: 3.1, glowRadius: 9, alpha: 0.9 });
 
     if (link.label) {
-      const lx = 0.25 * fromN.x + 0.5 * ctrlX + 0.25 * toN.x;
-      const ly = 0.25 * fromN.y + 0.5 * ctrlY + 0.25 * toN.y;
+      const labelT = lIdx % 2 === 0 ? 0.38 : 0.62;
+      const lu = 1 - labelT;
+      const lx = lu * lu * fromN.x + 2 * lu * labelT * ctrlX + labelT * labelT * toN.x;
+      const ly = lu * lu * fromN.y + 2 * lu * labelT * ctrlY + labelT * labelT * toN.y;
       drawBadgeLabel(ctx, truncateText(link.label, 18), lx, ly, {
         color: style.color,
         borderColor: style.color,

@@ -2111,17 +2111,45 @@ export async function getCourseById(db, id) {
 
 function parseAiCourseJson(rawText) {
   const text = String(rawText || '').trim();
-  const stripped = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    const start = stripped.indexOf('{');
-    const end = stripped.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      return JSON.parse(stripped.slice(start, end + 1));
+  const stripped = text
+    .replace(/^\s*```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .replace(/,(\s*[}\]])/g, '$1')
+    .trim();
+
+  const tryParse = candidate => {
+    try {
+      return { ok: true, value: JSON.parse(candidate) };
+    } catch (err) {
+      return { ok: false, err };
     }
-    throw new Error('JSON inválido devuelto por el modelo.');
+  };
+
+  const first = tryParse(stripped);
+  if (first.ok) return first.value;
+
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  let errToReport = first.err;
+  let sample = stripped;
+  if (start >= 0 && end > start) {
+    const sliced = stripped.slice(start, end + 1).replace(/,(\s*[}\]])/g, '$1');
+    const second = tryParse(sliced);
+    if (second.ok) return second.value;
+    errToReport = second.err;
+    sample = sliced;
   }
+
+  const msg = String(errToReport?.message || 'JSON inválido devuelto por el modelo.');
+  const posMatch = msg.match(/position\s+(\d+)/i);
+  if (posMatch) {
+    const pos = Number.parseInt(posMatch[1], 10);
+    const lo = Math.max(0, pos - 50);
+    const hi = Math.min(sample.length, pos + 50);
+    const snippet = sample.slice(lo, hi).replace(/\s+/g, ' ');
+    throw new Error(`${msg} | contexto: ${snippet}`);
+  }
+  throw new Error(msg);
 }
 
 export async function generateInteractiveCourse(db, env = {}, input = {}) {
@@ -2168,8 +2196,9 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
       '- timeline_arc: eraFocus (0..4), momentum, continuity (sceneState: { activeMilestone, milestones[5]{era,title,detail} })',
       '- tension_matrix: axisX, axisY, volatility (sceneState: { xAxis, yAxis, quadrants[4], items[5]{label,x,y}, focusItem })',
       'Si recibes datos de una maestría UCG, ancla ejemplos solo en esos hechos verificados (no inventes precios si inversion es null).',
+      'Regla estricta de JSON válido: NUNCA escribas comillas dobles (") ni saltos de línea literales dentro de valores de texto en español; usa comillas simples (\') o comillas latinas («»).',
       'Responde SOLO con JSON válido puro (sin ```json ni texto extra): {"title":"<=80 chars","subtitle":"<=140 chars","renderer":"...","lessons":[...]} con exactamente ' + lessonCount + ' lecciones.',
-      'Mantén el JSON compacto para no exceder tokens: cada lección con id, title, summary (1 frase), renderer, equation (LaTeX si es cuantitativo o tesis conceptual plana si es cualitativo), explorePrompt (1 frase), params (2-3 objetos {id,label,min,max,step,default,unit}), exactamente 4 beats ({t,title,caption (<=16 palabras),equation,mood (neutral|curious|excited|emphatic),speechText (22-38 palabras naturales en español),sceneState}), y quiz ({question,options(4 cortas),correctIndex,explanation (1 frase)}).',
+      'Mantén el JSON compacto para no exceder tokens: nodes (5), links (6), milestones (5 con detail <= 16 palabras); cada lección con id, title, summary (1 frase), renderer, equation (LaTeX si es cuantitativo o tesis conceptual plana si es cualitativo), explorePrompt (1 frase), params (2-3 objetos {id,label,min,max,step,default,unit}), exactamente 4 beats ({t,title,caption (<=16 palabras),equation,mood (neutral|curious|excited|emphatic),speechText (18-30 palabras naturales en español),sceneState}), y quiz ({question,options(4 cortas),correctIndex,explanation (1 frase)}).',
     ].join('\n');
 
     const userPrompt = JSON.stringify({
@@ -2192,8 +2221,20 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
     });
 
     try {
-      const aiRaw = await aiText(env, systemPrompt, userPrompt, 8000, { timeoutMs: 55000, effort: 'low' });
-      rawCourse = parseAiCourseJson(aiRaw);
+      const aiRaw = await aiText(env, systemPrompt, userPrompt, 10000, { timeoutMs: 55000, effort: 'low' });
+      try {
+        rawCourse = parseAiCourseJson(aiRaw);
+      } catch (parseErr) {
+        console.warn('course-studio ai json repair retry:', parseErr?.message || 'parse error');
+        const repairedRaw = await aiText(
+          env,
+          'Eres un validador estricto de JSON. Corrige únicamente los errores de sintaxis JSON (como comillas dobles sin escapar dentro de strings o comas faltantes) y devuelve SOLO el objeto JSON válido puro sin backticks ni texto extra.',
+          aiRaw,
+          10000,
+          { timeoutMs: 35000, effort: 'low' }
+        );
+        rawCourse = parseAiCourseJson(repairedRaw);
+      }
       if (rawCourse && Array.isArray(rawCourse.lessons) && rawCourse.lessons.length) {
         mode = aiVendor;
       } else {
