@@ -727,15 +727,25 @@ function ensureStudioControllers() {
   if (!state.avatar && els.avatarMount) {
     state.avatar = createAvatarKokoroController(els.avatarMount, {
       onVoiceStatus: (status) => {
-        if (els.kokoroStatusText && status?.message) {
-          els.kokoroStatusText.textContent = status.message;
+        if (els.kokoroStatusText) {
+          if (status?.message) {
+            els.kokoroStatusText.textContent = status.message;
+          } else if (status?.state === 'loading') {
+            els.kokoroStatusText.textContent = 'Preparando Kokoro-82M Español…';
+          } else if (status?.state === 'ready') {
+            els.kokoroStatusText.textContent = `Kokoro-82M Español (es-419) listo (${String(status.device || 'wasm').toUpperCase()})`;
+          } else if (status?.state === 'error') {
+            els.kokoroStatusText.textContent = 'Error al cargar Kokoro-82M Español. Puedes reintentar.';
+          }
         }
         if (els.kokoroStatusPill) {
-          els.kokoroStatusPill.classList.remove('is-idle', 'is-loading', 'is-ready');
+          els.kokoroStatusPill.classList.remove('is-idle', 'is-loading', 'is-ready', 'is-error');
           if (status?.state === 'ready') {
             els.kokoroStatusPill.classList.add('is-ready');
           } else if (status?.state === 'loading') {
             els.kokoroStatusPill.classList.add('is-loading');
+          } else if (status?.state === 'error') {
+            els.kokoroStatusPill.classList.add('is-error');
           } else {
             els.kokoroStatusPill.classList.add('is-idle');
           }
@@ -745,11 +755,22 @@ function ensureStudioControllers() {
             els.prepareKokoroBtn.textContent = `✓ Kokoro-82M listo (${String(status.device || 'wasm').toUpperCase()})`;
             els.prepareKokoroBtn.disabled = true;
           } else if (status?.state === 'loading') {
-            els.prepareKokoroBtn.textContent = 'Descargando Kokoro-82M…';
+            els.prepareKokoroBtn.textContent = 'Preparando Kokoro-82M Español…';
             els.prepareKokoroBtn.disabled = true;
+          } else if (status?.state === 'error') {
+            els.prepareKokoroBtn.textContent = 'Reintentar Kokoro-82M (WebGPU/WASM)';
+            els.prepareKokoroBtn.disabled = false;
           } else {
             els.prepareKokoroBtn.textContent = 'Preparar Kokoro-82M (WebGPU/WASM)';
             els.prepareKokoroBtn.disabled = false;
+          }
+        }
+        if (status?.state === 'ready' && !state.isPlaying) {
+          const lesson = getActiveLesson();
+          const currentBeat = Array.isArray(lesson?.beats) ? lesson.beats[state.beatIndex] : null;
+          const text = currentBeat ? (currentBeat.speechText || currentBeat.caption || currentBeat.title || '') : '';
+          if (text) {
+            state.avatar?.prefetch?.(text, { voice: state.voiceId, speed: state.speed });
           }
         }
       },
@@ -764,11 +785,10 @@ function ensureStudioControllers() {
         els.kokoroProgressBar.style.width = `${pct}%`;
         els.kokoroProgressPct.textContent = `${pct}%`;
       },
-      onSpeechStart: (info) => {
+      onSpeechStart: () => {
         if (els.avatarSpeakingBadge) els.avatarSpeakingBadge.classList.add('is-speaking');
         if (els.avatarSpeakingLabel) {
-          els.avatarSpeakingLabel.textContent =
-            info?.engine === 'kokoro' ? 'Narrando (Kokoro-82M)' : 'Narrando en vivo';
+          els.avatarSpeakingLabel.textContent = 'Narrando · Kokoro-82M (es-419)';
         }
       },
       onSpeechEnd: () => {
@@ -998,6 +1018,16 @@ async function startPlaybackFrom(startIdx) {
     if (token !== state.playToken) return;
     applyBeat(i);
     const beat = beats[i];
+    const nextBeat = beats[i + 1];
+    if (nextBeat) {
+      const nextText = nextBeat.speechText || nextBeat.caption || nextBeat.title || '';
+      if (nextText) {
+        state.avatar?.prefetch?.(nextText, {
+          voice: state.voiceId,
+          speed: state.speed
+        });
+      }
+    }
     const speechText = beat.speechText || beat.caption || beat.title || '';
     if (state.avatar && speechText) {
       const res = await state.avatar.speak(speechText, {
@@ -1005,7 +1035,18 @@ async function startPlaybackFrom(startIdx) {
         mood: beat.mood || 'neutral',
         speed: state.speed
       });
-      if (token !== state.playToken || !res?.ok) return;
+      if (token !== state.playToken || !res?.ok) {
+        if (token === state.playToken && res && !res.cancelled && res.error && els.kokoroStatusText) {
+          els.kokoroStatusText.textContent = String(res.error);
+        }
+        if (token === state.playToken) {
+          state.isPlaying = false;
+          state.isPaused = false;
+          if (state.engine) state.engine.setPlaying(false);
+          updatePlayButtonUi();
+        }
+        return;
+      }
     }
   }
 
@@ -1044,6 +1085,12 @@ function loadLessonAt(lessonIdx) {
   renderBeatPills(lesson);
   applyBeat(0);
   renderQuiz(lesson);
+
+  const firstBeat = Array.isArray(lesson.beats) ? lesson.beats[0] : null;
+  const firstSpeech = firstBeat ? (firstBeat.speechText || firstBeat.caption || firstBeat.title || '') : '';
+  if (firstSpeech) {
+    state.avatar?.prefetch?.(firstSpeech, { voice: state.voiceId, speed: state.speed });
+  }
 }
 
 function enterCourse(course) {
@@ -1087,11 +1134,17 @@ function enterCourse(course) {
 
   ensureStudioControllers();
   if (state.avatar) {
-    state.avatar.init({ preloadKokoro: false });
+    state.avatar.init({ preloadKokoro: true });
     state.avatar.setVoice(state.voiceId);
   }
   if (state.engine) {
     window.requestAnimationFrame(() => state.engine?.resize());
+  }
+
+  if (course.slug && typeof window !== 'undefined' && window.history?.replaceState) {
+    const shareUrl = new URL(window.location.href);
+    shareUrl.searchParams.set('curso', course.slug);
+    window.history.replaceState(null, '', shareUrl.toString());
   }
 
   loadLessonAt(0);
@@ -1352,7 +1405,8 @@ function bindEvents() {
         }
         createdCourse = data.course;
         showCreatorStatus('');
-      } catch {
+      } catch (err) {
+        console.warn('No se pudo generar el curso en el servidor; usando modo local:', err);
         createdCourse = buildLocalFallbackCourse({ topic, programSlug: programSlug || null, level, voiceId });
         showCreatorStatus('Generado en modo local interactivo (sin conexión al servidor).');
       } finally {

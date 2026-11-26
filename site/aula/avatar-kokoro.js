@@ -10,6 +10,8 @@ export const VOICE_PROFILES = [
 export const DEFAULT_AVATAR_URL =
   'https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@main/avatars/brunette.glb';
 
+const MAX_SYNTH_CACHE_ENTRIES = 32;
+
 const MOOD_PRESETS = {
   neutral: { headTiltZ: 0.0, headPitchX: 0.0, smile: 0.14, browUp: 0.04, nodAmp: 0.014, haloHue: 0x58c4dd },
   curious: { headTiltZ: 0.08, headPitchX: -0.04, smile: 0.18, browUp: 0.34, nodAmp: 0.02, haloHue: 0x9a72ac },
@@ -172,38 +174,6 @@ function getVoiceProfile(voiceId) {
   return VOICE_PROFILES.find((v) => v.id === voiceId) || VOICE_PROFILES[0];
 }
 
-function pickSpanishSpeechVoice(voiceProfile) {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return null;
-  const voices = window.speechSynthesis.getVoices() || [];
-  if (!voices.length) return null;
-
-  const isMale = voiceProfile.id.startsWith('em_');
-  const esVoices = voices.filter((v) => /^es/i.test(v.lang || ''));
-  if (!esVoices.length) return null;
-
-  const preferredLangs = ['es-ec', 'es-419', 'es-mx', 'es-co', 'es-us', 'es-es'];
-  const scored = esVoices.map((v) => {
-    const langLower = String(v.lang || '').toLowerCase();
-    const nameLower = String(v.name || '').toLowerCase();
-    let score = 0;
-    const langRank = preferredLangs.findIndex((p) => langLower.startsWith(p));
-    if (langRank >= 0) score += 20 - langRank * 2;
-    if (/natural|neural|google|sabina|dalia|andrea|alonso|jorge|pablo|helena|monica/.test(nameLower)) {
-      score += 6;
-    }
-    if (isMale && /male|hombre|alonso|jorge|pablo|carlos|raul|diego|antonio|juan/.test(nameLower)) {
-      score += 8;
-    }
-    if (!isMale && /female|mujer|sabina|dalia|andrea|helena|monica|paulina|sofia|laura|elena/.test(nameLower)) {
-      score += 8;
-    }
-    return { v, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0].v;
-}
-
 export function createAvatarKokoroController(mountEl, callbacks = {}) {
   const {
     onVoiceStatus = null,
@@ -223,8 +193,13 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
   let worker = null;
   let kokoroState = 'idle'; // 'idle' | 'loading' | 'ready' | 'error'
   let kokoroDevice = null;
+  let workerInitPromise = null;
+  let resolveWorkerInit = null;
+  let rejectWorkerInit = null;
   let workerRequestSeq = 0;
   const pendingSpeakRequests = new Map();
+  const synthesisCache = new Map();
+  const inflightSynthRequests = new Map();
   let lastAudio = null;
 
   // Web Audio playback state
@@ -238,15 +213,12 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
   let speechToken = 0;
   let speaking = false;
   let paused = false;
-  let activeSpeechEngine = null; // 'kokoro' | 'speechSynthesis' | 'timed' | null
+  let activeSpeechEngine = null; // 'kokoro' | null
   let speechTimeline = [];
-  let speechDurationSec = 1;
   let speechStartedMs = 0;
   let speechPausedAccumMs = 0;
   let speechPauseStartedMs = 0;
   let speechEndResolver = null;
-  let fallbackTimerId = null;
-  let activeUtterance = null;
 
   // Three.js / fallback visual state
   let stageInitialized = false;
@@ -344,6 +316,25 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     return audioCtx;
   }
 
+  function settleWorkerInitSuccess(device) {
+    if (resolveWorkerInit) {
+      const res = resolveWorkerInit;
+      resolveWorkerInit = null;
+      rejectWorkerInit = null;
+      res({ ok: true, device });
+    }
+  }
+
+  function settleWorkerInitFailure(message) {
+    workerInitPromise = null;
+    if (rejectWorkerInit) {
+      const rej = rejectWorkerInit;
+      resolveWorkerInit = null;
+      rejectWorkerInit = null;
+      rej(new Error(message));
+    }
+  }
+
   function ensureWorker() {
     if (destroyed || typeof Worker === 'undefined') return null;
     if (worker) return worker;
@@ -372,7 +363,8 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
         if (typeof onProgress === 'function') {
           onProgress({ status: 'ready', progress: 100, file: '' });
         }
-        emitVoiceStatus({ message: `Kokoro-82M listo (${kokoroDevice.toUpperCase()})` });
+        emitVoiceStatus({ message: `Kokoro-82M Español listo (${kokoroDevice.toUpperCase()})` });
+        settleWorkerInitSuccess(kokoroDevice);
         return;
       }
 
@@ -390,62 +382,125 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
       }
 
       if (msg.type === 'error') {
+        const message = msg.message || 'Error en Kokoro-82M Español';
         if (msg.id && pendingSpeakRequests.has(msg.id)) {
           const pending = pendingSpeakRequests.get(msg.id);
           pendingSpeakRequests.delete(msg.id);
-          pending.reject(new Error(msg.message || 'Kokoro synthesis failed'));
+          pending.reject(new Error(message));
           return;
         }
         if (kokoroState !== 'ready') {
           kokoroState = 'error';
-          emitVoiceStatus({
-            message: msg.message || 'Kokoro-82M no disponible offline; usando voz del navegador'
-          });
+          emitVoiceStatus({ state: 'error', message });
+          settleWorkerInitFailure(message);
         }
       }
     });
 
     worker.addEventListener('error', (err) => {
+      const errMsg = err && err.message ? err.message : 'Error en Kokoro Worker';
       for (const [, pending] of pendingSpeakRequests.entries()) {
-        pending.reject(new Error(err && err.message ? err.message : 'Worker error'));
+        pending.reject(new Error(errMsg));
       }
       pendingSpeakRequests.clear();
       if (kokoroState !== 'ready') {
         kokoroState = 'error';
-        emitVoiceStatus({ message: 'Error en Kokoro Worker; usando voz del navegador' });
+        emitVoiceStatus({ state: 'error', message: errMsg });
+        settleWorkerInitFailure(errMsg);
       }
     });
 
     return worker;
   }
 
-  function triggerWorkerInit() {
+  function ensureKokoroReady() {
+    if (destroyed) {
+      return Promise.reject(new Error('Controlador destruido'));
+    }
+    if (kokoroState === 'ready') {
+      return Promise.resolve({ ok: true, device: kokoroDevice || 'wasm' });
+    }
+    if (kokoroState === 'error') {
+      workerInitPromise = null;
+    }
+    if (workerInitPromise) {
+      return workerInitPromise;
+    }
+
     const w = ensureWorker();
     if (!w) {
       kokoroState = 'error';
-      emitVoiceStatus({ message: 'Web Worker no disponible; usando voz del navegador' });
-      return;
+      const msg = 'Web Worker no disponible en este navegador';
+      emitVoiceStatus({ state: 'error', message: msg });
+      return Promise.reject(new Error(msg));
     }
-    if (kokoroState === 'ready') {
-      emitVoiceStatus({ message: `Kokoro-82M listo (${(kokoroDevice || 'wasm').toUpperCase()})` });
-      return;
-    }
-    if (kokoroState === 'loading') return;
 
     kokoroState = 'loading';
-    emitVoiceStatus({ message: 'Descargando Kokoro-82M (WebGPU/WASM)...' });
-    w.postMessage({ type: 'init' });
+    emitVoiceStatus({ message: 'Cargando Kokoro-82M Español (es-419)...' });
+
+    workerInitPromise = new Promise((resolve, reject) => {
+      resolveWorkerInit = resolve;
+      rejectWorkerInit = reject;
+      w.postMessage({ type: 'init' });
+    });
+
+    return workerInitPromise;
   }
 
   function requestKokoroSynthesis(text, voice, speed) {
     const w = ensureWorker();
-    if (!w) return Promise.reject(new Error('Worker unavailable'));
+    if (!w) return Promise.reject(new Error('Worker no disponible'));
 
     const id = ++workerRequestSeq;
     return new Promise((resolve, reject) => {
       pendingSpeakRequests.set(id, { resolve, reject });
       w.postMessage({ type: 'speak', id, text, voice, speed });
     });
+  }
+
+  function makeSynthCacheKey(text, voiceId, speed) {
+    const safeSpeed = Number.isFinite(Number(speed)) ? Number(speed) : 1;
+    return `${voiceId}|${safeSpeed.toFixed(2)}|${text}`;
+  }
+
+  function putSynthCache(key, value) {
+    if (synthesisCache.has(key)) {
+      synthesisCache.delete(key);
+    } else if (synthesisCache.size >= MAX_SYNTH_CACHE_ENTRIES) {
+      const oldestKey = synthesisCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        synthesisCache.delete(oldestKey);
+      }
+    }
+    synthesisCache.set(key, value);
+  }
+
+  async function getOrSynthesizeKokoroAudio(text, voiceId, speed) {
+    const key = makeSynthCacheKey(text, voiceId, speed);
+    if (synthesisCache.has(key)) {
+      const cached = synthesisCache.get(key);
+      // Touch for LRU order
+      synthesisCache.delete(key);
+      synthesisCache.set(key, cached);
+      return cached;
+    }
+    if (inflightSynthRequests.has(key)) {
+      return inflightSynthRequests.get(key);
+    }
+
+    const promise = requestKokoroSynthesis(text, voiceId, speed)
+      .then((result) => {
+        if (result && result.float32Array && result.float32Array.length > 0) {
+          putSynthCache(key, result);
+        }
+        return result;
+      })
+      .finally(() => {
+        inflightSynthRequests.delete(key);
+      });
+
+    inflightSynthRequests.set(key, promise);
+    return promise;
   }
 
   function buildProceduralInstructorBust() {
@@ -817,7 +872,6 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
       box.getSize(size);
       box.getCenter(center);
 
-      // Normalize scale if model is unusually huge/tiny so a standard human is ~1.7m tall
       if (size.y > 0.01 && (size.y < 0.8 || size.y > 2.5)) {
         const scaleFactor = size.y < 0.8 ? 0.55 / size.y : 1.7 / size.y;
         root.scale.multiplyScalar(scaleFactor);
@@ -830,8 +884,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
       scaledBox.getCenter(scaledCenter);
       scaledBox.getSize(scaledSize);
 
-      // Center horizontally at x=0, z=0 and place head focus at y=1.50
-      let headY = scaledBox.max.y - Math.min(0.16, scaledSize.y * 0.11);
+      const headY = scaledBox.max.y - Math.min(0.16, scaledSize.y * 0.11);
       root.position.x -= scaledCenter.x;
       root.position.z -= scaledCenter.z;
       root.position.y += 1.5 - headY;
@@ -863,7 +916,6 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
         }
       });
 
-      // Re-center accurately on head bone if present
       if (glbHeadBone) {
         const headWorld = new THREE.Vector3();
         glbHeadBone.getWorldPosition(headWorld);
@@ -913,7 +965,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     }
   }
 
-  function computeCurrentSpeechRms(nowMs) {
+  function computeCurrentSpeechRms() {
     if (!speaking || paused) return 0;
 
     if (activeSpeechEngine === 'kokoro' && analyser && analyserData) {
@@ -927,10 +979,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
       return clamp01(rms * 3.8);
     }
 
-    const elapsedSec = Math.max(0, (nowMs - speechStartedMs - speechPausedAccumMs) / 1000);
-    const vis = sampleVisemeTimeline(speechTimeline, elapsedSec);
-    const syllabicPulse = 0.55 + 0.45 * Math.abs(Math.sin(elapsedSec * 13.5));
-    return clamp01(vis.open * syllabicPulse);
+    return 0;
   }
 
   function setMorphTarget(mesh, name, weight) {
@@ -965,7 +1014,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     animState.blink = lerp(animState.blink, targetBlink, Math.min(1, dtSec * 28));
 
     // Audio RMS + viseme sample
-    const rawRms = computeCurrentSpeechRms(nowMs);
+    const rawRms = computeCurrentSpeechRms();
     animState.rms = lerp(animState.rms, rawRms, smooth);
 
     let activeViseme = 'viseme_sil';
@@ -1116,10 +1165,6 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
   }
 
   function clearSpeechResources() {
-    if (fallbackTimerId !== null) {
-      window.clearTimeout(fallbackTimerId);
-      fallbackTimerId = null;
-    }
     if (activeBufferSource) {
       try {
         activeBufferSource.onended = null;
@@ -1129,16 +1174,6 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
         // already stopped
       }
       activeBufferSource = null;
-    }
-    if (activeUtterance && typeof window !== 'undefined' && window.speechSynthesis) {
-      try {
-        activeUtterance.onend = null;
-        activeUtterance.onerror = null;
-        window.speechSynthesis.cancel();
-      } catch {
-        // ignore synthesis cancel error
-      }
-      activeUtterance = null;
     }
   }
 
@@ -1160,7 +1195,11 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     if (wasSpeaking && typeof onSpeechEnd === 'function') {
       onSpeechEnd({ reason });
     }
-    emitVoiceStatus({ message: reason === 'stopped' ? 'Detenido' : 'Listo' });
+    emitVoiceStatus({
+      message: reason === 'stopped'
+        ? 'Detenido'
+        : `Kokoro-82M Español listo (${(kokoroDevice || 'wasm').toUpperCase()})`
+    });
   }
 
   async function playKokoroBuffer(float32Array, samplingRate, text, token) {
@@ -1168,7 +1207,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
 
     const ctx = ensureAudioContext();
     if (!ctx) {
-      throw new Error('AudioContext unavailable');
+      throw new Error('AudioContext no disponible');
     }
     if (ctx.state === 'suspended') {
       await ctx.resume();
@@ -1186,15 +1225,15 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     activeSpeechEngine = 'kokoro';
     speaking = true;
     paused = false;
-    speechDurationSec = audioBuffer.duration;
-    speechTimeline = buildSpanishVisemeTimeline(text, speechDurationSec);
+    const durationSec = audioBuffer.duration;
+    speechTimeline = buildSpanishVisemeTimeline(text, durationSec);
     speechStartedMs = performance.now();
     speechPausedAccumMs = 0;
 
     if (typeof onSpeechStart === 'function') {
-      onSpeechStart({ engine: 'kokoro', durationSec: speechDurationSec, text });
+      onSpeechStart({ engine: 'kokoro', durationSec, text });
     }
-    emitVoiceStatus({ message: `Narrando con Kokoro-82M (${currentVoiceId})` });
+    emitVoiceStatus({ message: `Narrando con Kokoro-82M Español (${currentVoiceId})` });
 
     return new Promise((resolve) => {
       speechEndResolver = resolve;
@@ -1209,108 +1248,12 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     });
   }
 
-  function playBrowserSpeechSynthesis(text, speed, token) {
-    if (destroyed || token !== speechToken) return Promise.resolve({ ok: false, cancelled: true });
-
-    const profile = getVoiceProfile(currentVoiceId);
-    const rate = Math.min(1.6, Math.max(0.7, Number(speed) || 1));
-    const estDurationSec = Math.max(1.2, (text.length / 13.8) / rate);
-
-    activeSpeechEngine = 'speechSynthesis';
-    speaking = true;
-    paused = false;
-    speechDurationSec = estDurationSec;
-    speechTimeline = buildSpanishVisemeTimeline(text, estDurationSec);
-    speechStartedMs = performance.now();
-    speechPausedAccumMs = 0;
-
-    const hasSpeechApi =
-      typeof window !== 'undefined' &&
-      typeof window.speechSynthesis !== 'undefined' &&
-      typeof window.SpeechSynthesisUtterance !== 'undefined';
-
-    if (!hasSpeechApi) {
-      activeSpeechEngine = 'timed';
-      if (typeof onSpeechStart === 'function') {
-        onSpeechStart({ engine: 'timed', durationSec: estDurationSec, text });
-      }
-      emitVoiceStatus({ message: 'Modo narración visual sincronizada' });
-
-      return new Promise((resolve) => {
-        speechEndResolver = resolve;
-        fallbackTimerId = window.setTimeout(() => {
-          if (token === speechToken) finishSpeech('ended');
-        }, Math.round(estDurationSec * 1000));
-      });
-    }
-
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
-    }
-
-    const utterance = new window.SpeechSynthesisUtterance(text);
-    const pickedVoice = pickSpanishSpeechVoice(profile);
-    if (pickedVoice) {
-      utterance.voice = pickedVoice;
-      utterance.lang = pickedVoice.lang;
-    } else {
-      utterance.lang = profile.lang || 'es-EC';
-    }
-    utterance.pitch = profile.pitch || 1;
-    utterance.rate = rate;
-    activeUtterance = utterance;
-
-    if (typeof onSpeechStart === 'function') {
-      onSpeechStart({ engine: 'speechSynthesis', durationSec: estDurationSec, text });
-    }
-    emitVoiceStatus({
-      message: kokoroState === 'loading'
-        ? 'Narrando al instante (Kokoro-82M descargándose...)'
-        : 'Narrando con voz del navegador'
-    });
-
-    return new Promise((resolve) => {
-      speechEndResolver = resolve;
-
-      const safetyMs = Math.round(estDurationSec * 1000) + 4500;
-      fallbackTimerId = window.setTimeout(() => {
-        if (token === speechToken && activeUtterance === utterance) {
-          finishSpeech('ended');
-        }
-      }, safetyMs);
-
-      utterance.onend = () => {
-        if (token === speechToken && activeUtterance === utterance) {
-          finishSpeech('ended');
-        } else {
-          resolve({ ok: false, cancelled: true });
-        }
-      };
-
-      utterance.onerror = () => {
-        if (token === speechToken && activeUtterance === utterance) {
-          finishSpeech('error');
-        } else {
-          resolve({ ok: false, cancelled: true });
-        }
-      };
-
-      try {
-        window.speechSynthesis.speak(utterance);
-      } catch {
-        activeSpeechEngine = 'timed';
-      }
-    });
-  }
-
   async function init(options = {}) {
     initThreeStage();
     const { preloadKokoro = true, avatarUrl = currentAvatarUrl } = options;
 
     if (preloadKokoro) {
-      triggerWorkerInit();
+      ensureKokoroReady().catch(() => {});
     }
 
     if (avatarUrl && avatarUrl !== 'procedural') {
@@ -1338,6 +1281,21 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     return currentMood;
   }
 
+  async function prefetch(text, options = {}) {
+    if (destroyed || kokoroState !== 'ready') return null;
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return null;
+
+    const voiceId = options.voice ? getVoiceProfile(options.voice).id : currentVoiceId;
+    const speed = Number.isFinite(Number(options.speed)) ? Number(options.speed) : 1;
+
+    try {
+      return await getOrSynthesizeKokoroAudio(cleanText, voiceId, speed);
+    } catch {
+      return null;
+    }
+  }
+
   async function speak(text, hooks = {}) {
     initThreeStage();
     const cleanText = String(text || '').trim();
@@ -1352,42 +1310,61 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     const token = ++speechToken;
     const speed = Number.isFinite(Number(hooks.speed)) ? Number(hooks.speed) : 1;
 
-    if (kokoroState === 'ready') {
-      try {
-        emitVoiceStatus({ message: 'Sintetizando voz neuronal Kokoro-82M...' });
-        const result = await requestKokoroSynthesis(cleanText, currentVoiceId, speed);
-        if (destroyed || token !== speechToken) {
-          return { ok: false, cancelled: true };
-        }
-        if (result && result.float32Array && result.float32Array.length > 0) {
-          lastAudio = {
-            float32Array: result.float32Array,
-            samplingRate: result.samplingRate || 24000,
-            text: cleanText,
-            voice: currentVoiceId
-          };
-          if (typeof hooks.onStart === 'function') hooks.onStart({ engine: 'kokoro' });
-          const playRes = await playKokoroBuffer(
-            result.float32Array,
-            result.samplingRate || 24000,
-            cleanText,
-            token
-          );
-          if (typeof hooks.onEnd === 'function') hooks.onEnd(playRes);
-          return playRes;
-        }
-      } catch {
-        if (destroyed || token !== speechToken) {
-          return { ok: false, cancelled: true };
-        }
-        // Seamless fallback below
-      }
+    // Unlock AudioContext synchronously during user gesture before async awaits
+    const ctx = ensureAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
     }
 
-    if (typeof hooks.onStart === 'function') hooks.onStart({ engine: 'speechSynthesis' });
-    const fallbackRes = await playBrowserSpeechSynthesis(cleanText, speed, token);
-    if (typeof hooks.onEnd === 'function') hooks.onEnd(fallbackRes);
-    return fallbackRes;
+    try {
+      if (kokoroState !== 'ready') {
+        emitVoiceStatus({ message: 'Cargando Kokoro-82M Español (es-419)...' });
+        await ensureKokoroReady();
+      }
+      if (destroyed || token !== speechToken) {
+        return { ok: false, cancelled: true };
+      }
+
+      emitVoiceStatus({ message: `Sintetizando voz Kokoro-82M Español (${currentVoiceId})...` });
+      const result = await getOrSynthesizeKokoroAudio(cleanText, currentVoiceId, speed);
+      if (destroyed || token !== speechToken) {
+        return { ok: false, cancelled: true };
+      }
+
+      if (!result || !result.float32Array || result.float32Array.length === 0) {
+        throw new Error('Kokoro-82M Español devolvió audio vacío');
+      }
+
+      lastAudio = {
+        float32Array: result.float32Array,
+        samplingRate: result.samplingRate || 24000,
+        text: cleanText,
+        voice: currentVoiceId
+      };
+
+      if (typeof hooks.onStart === 'function') {
+        hooks.onStart({ engine: 'kokoro' });
+      }
+
+      const playRes = await playKokoroBuffer(
+        result.float32Array,
+        result.samplingRate || 24000,
+        cleanText,
+        token
+      );
+      if (typeof hooks.onEnd === 'function') {
+        hooks.onEnd(playRes);
+      }
+      return playRes;
+    } catch (err) {
+      if (destroyed || token !== speechToken) {
+        return { ok: false, cancelled: true };
+      }
+      const message = err && err.message ? err.message : 'Error al sintetizar con Kokoro-82M Español';
+      kokoroState = 'error';
+      emitVoiceStatus({ state: 'error', message });
+      return { ok: false, error: message };
+    }
   }
 
   function stop(options = {}) {
@@ -1419,15 +1396,6 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
 
     if (activeSpeechEngine === 'kokoro' && audioCtx && audioCtx.state === 'running') {
       audioCtx.suspend().catch(() => {});
-    } else if (activeSpeechEngine === 'speechSynthesis' && window.speechSynthesis) {
-      try {
-        window.speechSynthesis.pause();
-      } catch {
-        // ignore
-      }
-    } else if (activeSpeechEngine === 'timed' && fallbackTimerId !== null) {
-      window.clearTimeout(fallbackTimerId);
-      fallbackTimerId = null;
     }
 
     emitVoiceStatus({ message: 'Narración en pausa' });
@@ -1444,22 +1412,9 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
 
     if (activeSpeechEngine === 'kokoro' && audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().catch(() => {});
-    } else if (activeSpeechEngine === 'speechSynthesis' && window.speechSynthesis) {
-      try {
-        window.speechSynthesis.resume();
-      } catch {
-        // ignore
-      }
-    } else if (activeSpeechEngine === 'timed') {
-      const elapsedSec = (performance.now() - speechStartedMs - speechPausedAccumMs) / 1000;
-      const remainingMs = Math.max(120, Math.round((speechDurationSec - elapsedSec) * 1000));
-      const token = speechToken;
-      fallbackTimerId = window.setTimeout(() => {
-        if (token === speechToken) finishSpeech('ended');
-      }, remainingMs);
     }
 
-    emitVoiceStatus({ message: 'Narración reanudada' });
+    emitVoiceStatus({ message: `Narrando con Kokoro-82M Español (${currentVoiceId})` });
     return true;
   }
 
@@ -1532,6 +1487,9 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
       pending.reject(new Error('Controller destroyed'));
     }
     pendingSpeakRequests.clear();
+    inflightSynthRequests.clear();
+    synthesisCache.clear();
+    settleWorkerInitFailure('Controller destroyed');
 
     if (audioCtx) {
       audioCtx.close().catch(() => {});
@@ -1565,6 +1523,7 @@ export function createAvatarKokoroController(mountEl, callbacks = {}) {
     setVoice,
     setMood,
     loadAvatarUrl,
+    prefetch,
     speak,
     stop,
     pause,
