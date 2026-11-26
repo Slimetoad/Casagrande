@@ -1820,14 +1820,15 @@ export async function generateInteractiveCourse(db, env = {}, input = {}) {
     });
 
     try {
-      const aiRaw = await aiText(env, systemPrompt, userPrompt, 3600);
+      const aiRaw = await aiText(env, systemPrompt, userPrompt, 4800, { timeoutMs: 55000, effort: 'low' });
       rawCourse = parseAiCourseJson(aiRaw);
       if (rawCourse && Array.isArray(rawCourse.lessons) && rawCourse.lessons.length) {
         mode = aiVendor;
       } else {
         rawCourse = null;
       }
-    } catch {
+    } catch (err) {
+      console.warn('course-studio ai fallback:', err?.message || 'Error');
       rawCourse = null;
       mode = 'plantilla';
     }

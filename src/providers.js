@@ -8,9 +8,9 @@ export const normalized = value => String(value ?? '').normalize('NFD').replace(
 export class ServiceError extends Error {
   constructor(message, status=503, remoteStatus=0) { super(message); this.status = status; this.remoteStatus = remoteStatus; }
 }
-export async function requestRemote(url, options, label) {
+export async function requestRemote(url, options, label, timeoutMs = 16000) {
   let response;
-  try { response = await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(16000)}); }
+  try { response = await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(timeoutMs)}); }
   catch { throw new ServiceError(label+' no confirmó la solicitud. Comprueba el estado del proveedor.'); }
   if (!response.ok) throw new ServiceError(label+' devolvió el código '+response.status+'. Revisa la configuración del servicio.',503,response.status);
   return response;
@@ -80,7 +80,7 @@ export function configRows(env) {
     row('semrush','Semrush',semrushReady(env),'Palabras clave, posición y volumen estimado del mercado configurado.')
   ];
 }
-export async function aiText(env,system,user,maxTokens=600) {
+export async function aiText(env,system,user,maxTokens=600,{timeoutMs=16000,effort=null}={}) {
   const vendor=activeAI(env);
   if (!vendor) throw new ServiceError('Configura un proveedor y un modelo de IA para generar contenido.',409);
   const p=aiProviders[vendor], model=env[p.model], secret=env[p.key];
@@ -91,7 +91,7 @@ export async function aiText(env,system,user,maxTokens=600) {
     body={model,max_tokens:maxTokens,system,messages:[{role:'user',content:user}]};
     if (model==='claude-haiku-5-5') {
       body.max_tokens=Math.min(8192,maxTokens+640);
-      body.output_config={effort:maxTokens>=1400?'medium':'low'};
+      body.output_config={effort:effort || (maxTokens>=1400?'medium':'low')};
     }
   } else if(vendor==='google'){
     endpoint='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent';
@@ -102,7 +102,7 @@ export async function aiText(env,system,user,maxTokens=600) {
     headers.Authorization='Bearer '+secret;
     body={model,instructions:system,input:user,max_output_tokens:maxTokens,store:false};
   }
-  const res=await requestRemote(endpoint,{method:'POST',headers,body:JSON.stringify(body)},p.label);
+  const res=await requestRemote(endpoint,{method:'POST',headers,body:JSON.stringify(body)},p.label,timeoutMs);
   const data=await res.json();
   if (vendor==='anthropic' && ['refusal','max_tokens','model_context_window_exceeded'].includes(data.stop_reason))
     throw new ServiceError('La respuesta de Claude no se completó.',502);
